@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/CorentinB/warc"
+	"github.com/internetarchive/gowarc"
 	"github.com/spf13/cobra"
 )
 

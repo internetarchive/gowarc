@@ -1,7 +1,7 @@
 # warc
 
-[![GoDoc](https://godoc.org/github.com/CorentinB/warc?status.svg)](https://godoc.org/github.com/CorentinB/warc)
-[![Go Report Card](https://goreportcard.com/badge/github.com/CorentinB/warc)](https://goreportcard.com/report/github.com/CorentinB/warc)
+[![GoDoc](https://godoc.org/github.com/internetarchive/gowarc?status.svg)](https://godoc.org/github.com/internetarchive/gowarc)
+[![Go Report Card](https://goreportcard.com/badge/github.com/internetarchive/gowarc)](https://goreportcard.com/report/github.com/internetarchive/gowarc)
 
 A Go library for reading and writing [WARC files](https://iipc.github.io/warc-specifications/), with advanced features for web archiving.
 
@@ -20,7 +20,7 @@ A Go library for reading and writing [WARC files](https://iipc.github.io/warc-sp
 ## Installation
 
 ```bash
-go get github.com/CorentinB/warc
+go get github.com/internetarchive/gowarc
 ```
 
 ## Usage
@@ -33,7 +33,7 @@ This library's biggest feature is to provide a standard HTTP client through whic
 package main
 
 import (
-    "github.com/CorentinB/warc"
+    "github.com/internetarchive/gowarc"
     "net/http"
     "time"
 )
@@ -79,7 +79,7 @@ func main() {
     }
     defer client.Close()
 
-    // The error channel NEED to be consumed, else it will block the 
+    // The error channel NEED to be consumed, else it will block the
     // execution of the WARC module
     go func() {
 		for err := range client.Client.ErrChan {
@@ -88,7 +88,7 @@ func main() {
 	}()
 
     // This is optional but the module give a feedback on a channel passed as context value "feedback" to the
-    // request, this helps knowing when the record has been written to disk. If this is not used, the WARC 
+    // request, this helps knowing when the record has been written to disk. If this is not used, the WARC
     // writing is asynchronous
 	req, err := http.NewRequest("GET", "https://archive.org", nil)
 	if err != nil {

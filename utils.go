@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/CorentinB/warc/pkg/spooledtempfile"
+	"github.com/internetarchive/gowarc/pkg/spooledtempfile"
 	gzip "github.com/klauspost/compress/gzip"
 
 	"github.com/klauspost/compress/zstd"

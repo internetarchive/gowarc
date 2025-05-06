@@ -15,8 +15,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/CorentinB/warc/pkg/spooledtempfile"
 	"github.com/google/uuid"
+	"github.com/internetarchive/gowarc/pkg/spooledtempfile"
 	"github.com/maypok86/otter"
 	"github.com/miekg/dns"
 	tls "github.com/refraction-networking/utls"
