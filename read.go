@@ -8,7 +8,7 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/CorentinB/warc/pkg/spooledtempfile"
+	"github.com/internetarchive/gowarc/pkg/spooledtempfile"
 )
 
 // Reader store the bufio.Reader and gzip.Reader for a WARC file

@@ -1,4 +1,4 @@
-module github.com/CorentinB/warc
+module github.com/internetarchive/gowarc
 
 go 1.24.2
 
