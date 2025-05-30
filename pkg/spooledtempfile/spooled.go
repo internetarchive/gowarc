@@ -254,10 +254,10 @@ func (s *spooledTempFile) Close() error {
 
 	// Release the buffer back to the pool
 	if s.buf != nil {
-		s.buf = nil
-		if s.buf != nil && cap(s.buf) <= InitialBufferSize && cap(s.buf) > 0 {
+		if cap(s.buf) <= InitialBufferSize && cap(s.buf) > 0 {
 			spooledPool.Put(s.buf[:0]) // Reset the buffer before returning it to the pool
 		}
+		s.buf = nil
 	}
 
 	if s.file == nil {
