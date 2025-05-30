@@ -341,6 +341,9 @@ var getSystemMemoryUsedFraction = func() (float64, error) {
 		case "Cached":
 			cached = value
 		}
+		if memTotal > 0 && memAvailable > 0 {
+			break
+		}
 	}
 	if err := scanner.Err(); err != nil {
 		return 0, fmt.Errorf("scanner error reading /proc/meminfo: %v", err)
