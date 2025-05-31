@@ -16,7 +16,6 @@ type HTTPClientSettings struct {
 	RotatorSettings       *RotatorSettings
 	Proxy                 string
 	TempDir               string
-	DNSServer             string
 	DiscardHook           DiscardHook
 	DNSServers            []string
 	DedupeOptions         DedupeOptions
