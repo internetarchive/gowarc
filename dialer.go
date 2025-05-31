@@ -31,7 +31,6 @@ type customDialer struct {
 	DNSClient   *dns.Client
 	DNSRecords  *otter.Cache[string, net.IP]
 	net.Dialer
-	DNSServer   string
 	disableIPv4 bool
 	disableIPv6 bool
 }
