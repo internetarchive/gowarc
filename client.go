@@ -25,7 +25,6 @@ type HTTPClientSettings struct {
 	DNSRecordsTTL         time.Duration
 	DNSCacheSize          int
 	TLSHandshakeTimeout   time.Duration
-	TCPTimeout            time.Duration
 	MaxReadBeforeTruncate int
 	DecompressBody        bool
 	FollowRedirects       bool
@@ -169,10 +168,6 @@ func NewWARCWritingHTTPClient(HTTPClientSettings HTTPClientSettings) (httpClient
 
 	if HTTPClientSettings.TLSHandshakeTimeout == 0 {
 		HTTPClientSettings.TLSHandshakeTimeout = 10 * time.Second
-	}
-
-	if HTTPClientSettings.TCPTimeout == 0 {
-		HTTPClientSettings.TCPTimeout = 10 * time.Second
 	}
 
 	if HTTPClientSettings.DNSResolutionTimeout == 0 {
