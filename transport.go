@@ -50,7 +50,7 @@ func newCustomTransport(dialer *customDialer, decompressBody bool, TLSHandshakeT
 		TLSHandshakeTimeout:   TLSHandshakeTimeout,
 		ExpectContinueTimeout: 5 * time.Second,
 		TLSNextProto:          make(map[string]func(authority string, c *tls.Conn) http.RoundTripper),
-		DisableCompression:    true,
+		DisableCompression:    false,
 		ForceAttemptHTTP2:     false,
 		MaxIdleConns:          -1,
 		MaxIdleConnsPerHost:   -1,
