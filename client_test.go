@@ -144,6 +144,12 @@ func TestHTTPClient(t *testing.T) {
 	for _, path := range files {
 		testFileSingleHashCheck(t, path, "sha1:UIRWL5DFIPQ4MX3D3GFHM2HCVU3TZ6I3", []string{"26872"}, 1, server.URL+"/testdata/image.svg")
 	}
+
+	// verify that the remote dedupe count is correct
+	dataTotal := httpClient.DataTotal.Value()
+	if dataTotal < 27130 || dataTotal > 27160 {
+		t.Fatalf("total bytes downloaded mismatch, expected: 27130-27160 got: %d", dataTotal)
+	}
 }
 
 func TestHTTPClientRequestFailing(t *testing.T) {
@@ -863,6 +869,11 @@ func TestHTTPClientLocalDedupe(t *testing.T) {
 	if LocalDedupeTotal.Value() != 26872 {
 		t.Fatalf("local dedupe total mismatch, expected: 26872 got: %d", LocalDedupeTotal.Value())
 	}
+
+	// Ensure that HTTP client results work correctly as well
+	if httpClient.LocalDedupeTotal.Value() != 26872 {
+		t.Fatalf("local dedupe total mismatch, expected: 26872 got: %d", httpClient.LocalDedupeTotal.Value())
+	}
 }
 
 func TestHTTPClientRemoteDedupe(t *testing.T) {
@@ -950,6 +961,11 @@ func TestHTTPClientRemoteDedupe(t *testing.T) {
 	if RemoteDedupeTotal.Value() != 55896 {
 		t.Fatalf("remote dedupe total mismatch, expected: 55896 got: %d", RemoteDedupeTotal.Value())
 	}
+
+	// Ensure that HTTP client results work correctly as well
+	if httpClient.RemoteDedupeTotal.Value() != 55896 {
+		t.Fatalf("remote dedupe total mismatch, expected: 55896 got: %d", httpClient.RemoteDedupeTotal.Value())
+	}
 }
 
 func TestHTTPClientDedupeEmptyPayload(t *testing.T) {
@@ -1023,6 +1039,11 @@ func TestHTTPClientDedupeEmptyPayload(t *testing.T) {
 	// verify that the local dedupe count is correct
 	if LocalDedupeTotal.Value() != 0 {
 		t.Fatalf("local dedupe total mismatch, expected: 0 got: %d", LocalDedupeTotal.Value())
+	}
+
+	// Ensure that HTTP client results work correctly as well
+	if httpClient.LocalDedupeTotal.Value() != 0 {
+		t.Fatalf("local dedupe total mismatch, expected: 0 got: %d", httpClient.LocalDedupeTotal.Value())
 	}
 }
 
