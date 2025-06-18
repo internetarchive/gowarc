@@ -144,6 +144,11 @@ func TestHTTPClient(t *testing.T) {
 	for _, path := range files {
 		testFileSingleHashCheck(t, path, "sha1:UIRWL5DFIPQ4MX3D3GFHM2HCVU3TZ6I3", []string{"26872"}, 1, server.URL+"/testdata/image.svg")
 	}
+
+	// verify that the remote dedupe count is correct
+	if httpClient.DataTotal.Value() != 27146 {
+		t.Fatalf("total bytes downloaded mismatch, expected: 27146 got: %d", httpClient.DataTotal.Value())
+	}
 }
 
 func TestHTTPClientRequestFailing(t *testing.T) {
