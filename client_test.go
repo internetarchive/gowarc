@@ -863,6 +863,11 @@ func TestHTTPClientLocalDedupe(t *testing.T) {
 	if LocalDedupeTotal.Value() != 26872 {
 		t.Fatalf("local dedupe total mismatch, expected: 26872 got: %d", LocalDedupeTotal.Value())
 	}
+
+	// Ensure that HTTP client results work correctly as well
+	if httpClient.LocalDedupeTotal.Value() != 26872 {
+		t.Fatalf("local dedupe total mismatch, expected: 26872 got: %d", httpClient.LocalDedupeTotal.Value())
+	}
 }
 
 func TestHTTPClientRemoteDedupe(t *testing.T) {
@@ -950,6 +955,11 @@ func TestHTTPClientRemoteDedupe(t *testing.T) {
 	if RemoteDedupeTotal.Value() != 55896 {
 		t.Fatalf("remote dedupe total mismatch, expected: 55896 got: %d", RemoteDedupeTotal.Value())
 	}
+
+	// Ensure that HTTP client results work correctly as well
+	if httpClient.RemoteDedupeTotal.Value() != 55896 {
+		t.Fatalf("remote dedupe total mismatch, expected: 55896 got: %d", httpClient.RemoteDedupeTotal.Value())
+	}
 }
 
 func TestHTTPClientDedupeEmptyPayload(t *testing.T) {
@@ -1023,6 +1033,11 @@ func TestHTTPClientDedupeEmptyPayload(t *testing.T) {
 	// verify that the local dedupe count is correct
 	if LocalDedupeTotal.Value() != 0 {
 		t.Fatalf("local dedupe total mismatch, expected: 0 got: %d", LocalDedupeTotal.Value())
+	}
+
+	// Ensure that HTTP client results work correctly as well
+	if httpClient.LocalDedupeTotal.Value() != 0 {
+		t.Fatalf("local dedupe total mismatch, expected: 0 got: %d", httpClient.LocalDedupeTotal.Value())
 	}
 }
 

@@ -5,6 +5,8 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"github.com/paulbellamy/ratecounter"
 )
 
 type Error struct {
@@ -58,6 +60,9 @@ type CustomHTTPClient struct {
 	// If set to <= 0, the default value is DefaultMaxRAMUsageFraction.
 	MaxRAMUsageFraction float64
 	randomLocalIP       bool
+	DataTotal           *ratecounter.Counter
+	RemoteDedupeTotal   *ratecounter.Counter
+	LocalDedupeTotal    *ratecounter.Counter
 }
 
 func (c *CustomHTTPClient) Close() error {
@@ -90,6 +95,11 @@ func (c *CustomHTTPClient) Close() error {
 
 func NewWARCWritingHTTPClient(HTTPClientSettings HTTPClientSettings) (httpClient *CustomHTTPClient, err error) {
 	httpClient = new(CustomHTTPClient)
+
+	// Initialize counters
+	httpClient.DataTotal = DataTotal
+	httpClient.RemoteDedupeTotal = RemoteDedupeTotal
+	httpClient.LocalDedupeTotal = LocalDedupeTotal
 
 	// Configure random local IP
 	httpClient.randomLocalIP = HTTPClientSettings.RandomLocalIP
