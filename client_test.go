@@ -94,6 +94,9 @@ func TestHTTPClient(t *testing.T) {
 		err             error
 	)
 
+	// Reset counter to 0?
+	DataTotal.Reset()
+
 	// init test HTTP endpoint
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fileBytes, err := os.ReadFile(path.Join("testdata", "image.svg"))
@@ -804,6 +807,10 @@ func TestHTTPClientLocalDedupe(t *testing.T) {
 		err             error
 	)
 
+	// Reset counter to 0?
+	LocalDedupeTotal.Reset()
+	LocalDedupeTotalBytes.Reset()
+
 	// init test HTTP endpoint
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fileBytes, err := os.ReadFile(path.Join("testdata", "image.svg"))
@@ -866,13 +873,17 @@ func TestHTTPClientLocalDedupe(t *testing.T) {
 	}
 
 	// verify that the local dedupe count is correct
-	if LocalDedupeTotal.Value() != 26872 {
-		t.Fatalf("local dedupe total mismatch, expected: 26872 got: %d", LocalDedupeTotal.Value())
+	if LocalDedupeTotalBytes.Value() != 26872 {
+		t.Fatalf("local dedupe total bytes mismatch, expected: 26872 got: %d", LocalDedupeTotalBytes.Value())
 	}
 
 	// Ensure that HTTP client results work correctly as well
-	if httpClient.LocalDedupeTotal.Value() != 26872 {
-		t.Fatalf("local dedupe total mismatch, expected: 26872 got: %d", httpClient.LocalDedupeTotal.Value())
+	if httpClient.LocalDedupeTotalBytes.Value() != 26872 {
+		t.Fatalf("local dedupe total bytes mismatch, expected: 26872 got: %d", httpClient.LocalDedupeTotalBytes.Value())
+	}
+
+	if httpClient.LocalDedupeTotal.Value() != 2 {
+		t.Fatalf("local dedupe total mismatch, expected: 2 got: %d", httpClient.LocalDedupeTotal.Value())
 	}
 }
 
@@ -886,6 +897,10 @@ func TestHTTPClientRemoteDedupe(t *testing.T) {
 	)
 	// init test HTTP endpoint
 	mux := http.NewServeMux()
+
+	// Reset counter to 0?
+	CDXDedupeTotal.Reset()
+	CDXDedupeTotalBytes.Reset()
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		fileBytes, err := os.ReadFile(path.Join("testdata", "image.svg"))
@@ -958,13 +973,17 @@ func TestHTTPClientRemoteDedupe(t *testing.T) {
 	}
 
 	// verify that the remote dedupe count is correct
-	if RemoteDedupeTotal.Value() != 55896 {
-		t.Fatalf("remote dedupe total mismatch, expected: 55896 got: %d", RemoteDedupeTotal.Value())
+	if CDXDedupeTotalBytes.Value() != 55896 {
+		t.Fatalf("remote dedupe total bytes mismatch, expected: 55896 got: %d", CDXDedupeTotalBytes.Value())
 	}
 
 	// Ensure that HTTP client results work correctly as well
-	if httpClient.RemoteDedupeTotal.Value() != 55896 {
-		t.Fatalf("remote dedupe total mismatch, expected: 55896 got: %d", httpClient.RemoteDedupeTotal.Value())
+	if httpClient.CDXDedupeTotalBytes.Value() != 55896 {
+		t.Fatalf("remote dedupe total bytes mismatch, expected: 55896 got: %d", httpClient.CDXDedupeTotalBytes.Value())
+	}
+
+	if httpClient.CDXDedupeTotal.Value() != 4 {
+		t.Fatalf("remote dedupe total mismatch, expected: 4 got: %d", httpClient.CDXDedupeTotal.Value())
 	}
 }
 
@@ -979,6 +998,10 @@ func TestHTTPClientDoppelgangerDedupe(t *testing.T) {
 	)
 	// init test HTTP endpoint
 	mux := http.NewServeMux()
+
+	// Reset counter to 0?
+	DoppelgangerDedupeTotal.Reset()
+	DoppelgangerDedupeTotalBytes.Reset()
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		fileBytes, err := os.ReadFile(path.Join("testdata", "image.svg"))
@@ -1035,8 +1058,6 @@ func TestHTTPClientDoppelgangerDedupe(t *testing.T) {
 		defer resp.Body.Close()
 
 		io.Copy(io.Discard, resp.Body)
-
-		time.Sleep(time.Second)
 	}
 
 	httpClient.Close()
@@ -1052,13 +1073,17 @@ func TestHTTPClientDoppelgangerDedupe(t *testing.T) {
 	}
 
 	// verify that the remote dedupe count is correct
-	if RemoteDedupeTotal.Value() != 107488 {
-		t.Fatalf("remote dedupe total mismatch, expected: 107488 got: %d", RemoteDedupeTotal.Value())
+	if DoppelgangerDedupeTotalBytes.Value() != 107488 {
+		t.Fatalf("remote dedupe total bytes mismatch, expected: 107488 got: %d", DoppelgangerDedupeTotalBytes.Value())
 	}
 
 	// Ensure that HTTP client results work correctly as well
-	if httpClient.RemoteDedupeTotal.Value() != 107488 {
-		t.Fatalf("remote dedupe total mismatch, expected: 107488 got: %d", httpClient.RemoteDedupeTotal.Value())
+	if httpClient.DoppelgangerDedupeTotalBytes.Value() != 107488 {
+		t.Fatalf("remote dedupe total bytes mismatch, expected: 107488 got: %d", httpClient.DoppelgangerDedupeTotalBytes.Value())
+	}
+
+	if httpClient.DoppelgangerDedupeTotal.Value() != 4 {
+		t.Fatalf("remote dedupe total mismatch, expected: 4 got: %d", httpClient.DoppelgangerDedupeTotal.Value())
 	}
 }
 
@@ -1071,6 +1096,7 @@ func TestHTTPClientDedupeEmptyPayload(t *testing.T) {
 
 	// Reset counter to 0?
 	LocalDedupeTotal.Reset()
+	LocalDedupeTotalBytes.Reset()
 
 	// init test HTTP endpoint
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1131,11 +1157,15 @@ func TestHTTPClientDedupeEmptyPayload(t *testing.T) {
 	}
 
 	// verify that the local dedupe count is correct
-	if LocalDedupeTotal.Value() != 0 {
-		t.Fatalf("local dedupe total mismatch, expected: 0 got: %d", LocalDedupeTotal.Value())
+	if LocalDedupeTotalBytes.Value() != 0 {
+		t.Fatalf("local dedupe total bytes mismatch, expected: 0 got: %d", LocalDedupeTotalBytes.Value())
 	}
 
 	// Ensure that HTTP client results work correctly as well
+	if httpClient.LocalDedupeTotalBytes.Value() != 0 {
+		t.Fatalf("local dedupe total bytes mismatch, expected: 0 got: %d", httpClient.LocalDedupeTotalBytes.Value())
+	}
+
 	if httpClient.LocalDedupeTotal.Value() != 0 {
 		t.Fatalf("local dedupe total mismatch, expected: 0 got: %d", httpClient.LocalDedupeTotal.Value())
 	}
