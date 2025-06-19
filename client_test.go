@@ -968,6 +968,100 @@ func TestHTTPClientRemoteDedupe(t *testing.T) {
 	}
 }
 
+// TODO: figure out why test returns two different numbers depending on if run together or seperately.
+func TestHTTPClientDoppelgangerDedupe(t *testing.T) {
+	var (
+		dedupePath      = "/api/records/UIRWL5DFIPQ4MX3D3GFHM2HCVU3TZ6I3"
+		dedupeResp      = "{\"id\":\"UIRWL5DFIPQ4MX3D3GFHM2HCVU3TZ6I3\",\"uri\":\"https://upload.wikimedia.org/wikipedia/commons/5/55/Blason_ville_fr_Sarlat-la-Can%C3%A9da_%28Dordogne%29.svg\",\"date\":20220320002518}"
+		rotatorSettings = defaultRotatorSettings(t)
+		errWg           sync.WaitGroup
+		err             error
+	)
+	// init test HTTP endpoint
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		fileBytes, err := os.ReadFile(path.Join("testdata", "image.svg"))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		w.Header().Set("Content-Type", "image/svg+xml")
+		w.WriteHeader(http.StatusOK)
+		w.Write(fileBytes)
+	})
+
+	mux.HandleFunc(dedupePath, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain;charset=UTF-8")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(dedupeResp))
+	})
+
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	// init the HTTP client responsible for recording HTTP(s) requests / responses
+	httpClient, err := NewWARCWritingHTTPClient(HTTPClientSettings{
+		RotatorSettings: rotatorSettings,
+		DedupeOptions: DedupeOptions{
+			LocalDedupe:        false,
+			CDXDedupe:          false,
+			DoppelgangerDedupe: true,
+			DoppelgangerHost:   server.URL,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Unable to init WARC writing HTTP client: %s", err)
+	}
+
+	errWg.Add(1)
+	go func() {
+		defer errWg.Done()
+		for err := range httpClient.ErrChan {
+			t.Errorf("Error writing to WARC: %s", err.Err.Error())
+		}
+	}()
+
+	for i := 0; i < 4; i++ {
+		req, err := http.NewRequest("GET", server.URL, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		resp, err := httpClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+
+		io.Copy(io.Discard, resp.Body)
+
+		time.Sleep(time.Second)
+	}
+
+	httpClient.Close()
+
+	files, err := filepath.Glob(rotatorSettings.OutputDirectory + "/*")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, path := range files {
+		testFileSingleHashCheck(t, path, "sha1:UIRWL5DFIPQ4MX3D3GFHM2HCVU3TZ6I3", []string{"26872", "132"}, 4, server.URL+"/")
+		testFileRevisitVailidity(t, path, "20220320002518", "sha1:UIRWL5DFIPQ4MX3D3GFHM2HCVU3TZ6I3", false)
+	}
+
+	// verify that the remote dedupe count is correct
+	if RemoteDedupeTotal.Value() != 107488 {
+		t.Fatalf("remote dedupe total mismatch, expected: 107488 got: %d", RemoteDedupeTotal.Value())
+	}
+
+	// Ensure that HTTP client results work correctly as well
+	if httpClient.RemoteDedupeTotal.Value() != 107488 {
+		t.Fatalf("remote dedupe total mismatch, expected: 107488 got: %d", httpClient.RemoteDedupeTotal.Value())
+	}
+}
+
 func TestHTTPClientDedupeEmptyPayload(t *testing.T) {
 	var (
 		rotatorSettings = defaultRotatorSettings(t)

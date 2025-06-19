@@ -505,6 +505,11 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 			LocalDedupeTotal.Incr(int64(revisit.size))
 		}
 
+		if d.client.dedupeOptions.DoppelgangerDedupe && revisit.targetURI == "" {
+			revisit, _ = checkDoppelgangerRevisit(d.client.dedupeOptions.DoppelgangerHost, payloadDigest)
+			RemoteDedupeTotal.Incr(int64(bytesCopied))
+		}
+
 		// Allow both to be checked. If local dedupe does not find anything, check CDX (if set).
 		if d.client.dedupeOptions.CDXDedupe && revisit.targetURI == "" {
 			revisit, _ = checkCDXRevisit(d.client.dedupeOptions.CDXURL, payloadDigest, warcTargetURI, d.client.dedupeOptions.CDXCookie)
