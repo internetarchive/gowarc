@@ -61,8 +61,14 @@ type CustomHTTPClient struct {
 	MaxRAMUsageFraction float64
 	randomLocalIP       bool
 	DataTotal           *ratecounter.Counter
-	RemoteDedupeTotal   *ratecounter.Counter
-	LocalDedupeTotal    *ratecounter.Counter
+
+	CDXDedupeTotalBytes          *ratecounter.Counter
+	DoppelgangerDedupeTotalBytes *ratecounter.Counter
+	LocalDedupeTotalBytes        *ratecounter.Counter
+
+	CDXDedupeTotal          *ratecounter.Counter
+	DoppelgangerDedupeTotal *ratecounter.Counter
+	LocalDedupeTotal        *ratecounter.Counter
 }
 
 func (c *CustomHTTPClient) Close() error {
@@ -98,7 +104,13 @@ func NewWARCWritingHTTPClient(HTTPClientSettings HTTPClientSettings) (httpClient
 
 	// Initialize counters
 	httpClient.DataTotal = DataTotal
-	httpClient.RemoteDedupeTotal = RemoteDedupeTotal
+
+	httpClient.CDXDedupeTotalBytes = CDXDedupeTotalBytes
+	httpClient.DoppelgangerDedupeTotalBytes = DoppelgangerDedupeTotalBytes
+	httpClient.LocalDedupeTotalBytes = LocalDedupeTotalBytes
+
+	httpClient.CDXDedupeTotal = CDXDedupeTotal
+	httpClient.DoppelgangerDedupeTotal = DoppelgangerDedupeTotal
 	httpClient.LocalDedupeTotal = LocalDedupeTotal
 
 	// Configure random local IP
