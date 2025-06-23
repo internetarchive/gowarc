@@ -76,6 +76,18 @@ func drainErrChan(t *testing.T, errChan chan *Error) func() {
 	return func() { wg.Wait() }
 }
 
+func newTestImageServer(t testing.TB, st int) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fileBytes, err := os.ReadFile(path.Join("testdata", "image.svg"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Type", "image/svg+xml")
+		w.WriteHeader(st)
+		w.Write(fileBytes)
+	}))
+}
+
 func (e *errorReadCloser) Read(p []byte) (int, error) {
 	if len(e.data) > 0 && e.readBefore > 0 {
 		// Read up to min(len(p), readBefore, len(data))
@@ -107,16 +119,7 @@ func TestHTTPClient(t *testing.T) {
 	)
 
 	// init test HTTP endpoint
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fileBytes, err := os.ReadFile(path.Join("testdata", "image.svg"))
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		w.Header().Set("Content-Type", "image/svg+xml")
-		w.WriteHeader(http.StatusOK)
-		w.Write(fileBytes)
-	}))
+	server := newTestImageServer(t, http.StatusOK)
 	defer server.Close()
 
 	// init the HTTP client responsible for recording HTTP(s) requests / responses
@@ -160,16 +163,7 @@ func TestHTTPClientRequestFailing(t *testing.T) {
 	)
 
 	// init test HTTP endpoint
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fileBytes, err := os.ReadFile(path.Join("testdata", "image.svg"))
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		w.Header().Set("Content-Type", "image/svg+xml")
-		w.WriteHeader(http.StatusOK)
-		w.Write(fileBytes)
-	}))
+	server := newTestImageServer(t, http.StatusOK)
 	defer server.Close()
 
 	// init the HTTP client responsible for recording HTTP(s) requests / responses
@@ -290,16 +284,7 @@ func TestHTTPClientWithFeedbackChan(t *testing.T) {
 	)
 
 	// init test HTTP endpoint
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fileBytes, err := os.ReadFile(path.Join("testdata", "image.svg"))
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		w.Header().Set("Content-Type", "image/svg+xml")
-		w.WriteHeader(http.StatusOK)
-		w.Write(fileBytes)
-	}))
+	server := newTestImageServer(t, http.StatusOK)
 	defer server.Close()
 
 	// init the HTTP client responsible for recording HTTP(s) requests / responses
@@ -564,16 +549,7 @@ func TestHTTPClientWithProxy(t *testing.T) {
 	defer close(stopChan)
 
 	// init test HTTP endpoint
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fileBytes, err := os.ReadFile(path.Join("testdata", "image.svg"))
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		w.Header().Set("Content-Type", "image/svg+xml")
-		w.WriteHeader(http.StatusOK)
-		w.Write(fileBytes)
-	}))
+	server := newTestImageServer(t, http.StatusOK)
 	defer server.Close()
 
 	// init the HTTP client responsible for recording HTTP(s) requests / responses
@@ -619,16 +595,7 @@ func TestHTTPClientConcurrent(t *testing.T) {
 	)
 
 	// init test HTTP endpoint
-	fileBytes, err := os.ReadFile(path.Join("testdata", "image.svg"))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "image/svg+xml")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(fileBytes)
-	}))
+	server := newTestImageServer(t, http.StatusOK)
 	defer server.Close()
 
 	// init the HTTP client responsible for recording HTTP(s) requests / responses
@@ -686,16 +653,7 @@ func TestHTTPClientMultiWARCWriters(t *testing.T) {
 	rotatorSettings.WARCWriterPoolSize = 8
 
 	// init test HTTP endpoint
-	fileBytes, err := os.ReadFile(path.Join("testdata", "image.svg"))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "image/svg+xml")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(fileBytes)
-	}))
+	server := newTestImageServer(t, http.StatusOK)
 	defer server.Close()
 
 	// init the HTTP client responsible for recording HTTP(s) requests / responses
@@ -756,16 +714,7 @@ func TestHTTPClientLocalDedupe(t *testing.T) {
 	)
 
 	// init test HTTP endpoint
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fileBytes, err := os.ReadFile(path.Join("testdata", "image.svg"))
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		w.Header().Set("Content-Type", "image/svg+xml")
-		w.WriteHeader(http.StatusOK)
-		w.Write(fileBytes)
-	}))
+	server := newTestImageServer(t, http.StatusOK)
 	defer server.Close()
 
 	// init the HTTP client responsible for recording HTTP(s) requests / responses
@@ -973,16 +922,7 @@ func TestHTTPClientDiscardHook(t *testing.T) {
 	expectedReason := "429 response"
 
 	// init test HTTP endpoint
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fileBytes, err := os.ReadFile(path.Join("testdata", "image.svg"))
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		w.WriteHeader(http.StatusTooManyRequests)
-		w.Header().Set("Content-Type", "image/svg+xml")
-		w.Write(fileBytes)
-	}))
+	server := newTestImageServer(t, http.StatusTooManyRequests)
 	defer server.Close()
 
 	// init the HTTP client responsible for recording HTTP(s) requests / responses
@@ -1178,16 +1118,7 @@ func TestHTTPClientWithSelfSignedCertificate(t *testing.T) {
 	)
 
 	// init test (self-signed) HTTPS endpoint
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fileBytes, err := os.ReadFile(path.Join("testdata", "image.svg"))
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		w.Header().Set("Content-Type", "image/svg+xml")
-		w.WriteHeader(http.StatusOK)
-		w.Write(fileBytes)
-	}))
+	server := newTestImageServer(t, http.StatusOK)
 	defer server.Close()
 
 	// init the HTTP client responsible for recording HTTP(s) requests / responses
@@ -1287,16 +1218,7 @@ func TestHTTPClientFullOnDisk(t *testing.T) {
 	)
 
 	// init test HTTP endpoint
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fileBytes, err := os.ReadFile(path.Join("testdata", "image.svg"))
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		w.Header().Set("Content-Type", "image/svg+xml")
-		w.WriteHeader(http.StatusOK)
-		w.Write(fileBytes)
-	}))
+	server := newTestImageServer(t, http.StatusOK)
 	defer server.Close()
 
 	// init the HTTP client responsible for recording HTTP(s) requests / responses
@@ -1343,16 +1265,7 @@ func TestHTTPClientWithoutIoCopy(t *testing.T) {
 	// The intent is to ensure that invalid handling of responses generates a "SHA1 error".
 
 	// init test HTTP endpoint
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fileBytes, err := os.ReadFile(path.Join("testdata", "image.svg"))
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		w.Header().Set("Content-Type", "image/svg+xml")
-		w.WriteHeader(http.StatusOK)
-		w.Write(fileBytes)
-	}))
+	server := newTestImageServer(t, http.StatusOK)
 	defer server.Close()
 
 	// init the HTTP client responsible for recording HTTP(s) requests / responses
@@ -1452,16 +1365,7 @@ func TestHTTPClientWithZStandard(t *testing.T) {
 	rotatorSettings.Compression = "ZSTD"
 
 	// init test HTTP endpoint
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fileBytes, err := os.ReadFile(path.Join("testdata", "image.svg"))
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		w.Header().Set("Content-Type", "image/svg+xml")
-		w.WriteHeader(http.StatusOK)
-		w.Write(fileBytes)
-	}))
+	server := newTestImageServer(t, http.StatusOK)
 	defer server.Close()
 
 	// init the HTTP client responsible for recording HTTP(s) requests / responses
@@ -1507,16 +1411,7 @@ func TestHTTPClientWithZStandardDictionary(t *testing.T) {
 	rotatorSettings.CompressionDictionary = "testdata/dictionary"
 
 	// init test HTTP endpoint
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fileBytes, err := os.ReadFile(path.Join("testdata", "image.svg"))
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		w.Header().Set("Content-Type", "image/svg+xml")
-		w.WriteHeader(http.StatusOK)
-		w.Write(fileBytes)
-	}))
+	server := newTestImageServer(t, http.StatusOK)
 	defer server.Close()
 
 	// init the HTTP client responsible for recording HTTP(s) requests / responses
