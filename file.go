@@ -4,20 +4,14 @@ import (
 	"fmt"
 	"os"
 	"strconv"
-	"sync"
 	"sync/atomic"
 	"time"
 )
-
-var filenameGenerationLock = sync.Mutex{}
 
 // GenerateWarcFileName generate a WARC file name following recommendations
 // of the specs:
 // Prefix-Timestamp-Serial-Crawlhost.warc.gz
 func generateWarcFileName(prefix string, compression string, serial *atomic.Uint64) (fileName string) {
-	filenameGenerationLock.Lock()
-	defer filenameGenerationLock.Unlock()
-
 	// Get host name as reported by the kernel
 	hostName, err := os.Hostname()
 	if err != nil {
