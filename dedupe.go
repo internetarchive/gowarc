@@ -11,7 +11,8 @@ import (
 	"time"
 )
 
-var CDXHTTPClient = http.Client{
+// TODO: Add stats on how long dedupe HTTP requests take
+var DedupeHTTPClient = http.Client{
 	Timeout: 10 * time.Second,
 	Transport: &http.Transport{
 		Dial: (&net.Dialer{
@@ -56,7 +57,7 @@ func checkCDXRevisit(CDXURL string, digest string, targetURI string, cookie stri
 	if cookie != "" {
 		req.Header.Add("Cookie", cookie)
 	}
-	resp, err := CDXHTTPClient.Do(req)
+	resp, err := DedupeHTTPClient.Do(req)
 	if err != nil {
 		return revisitRecord{}, err
 	}
@@ -90,7 +91,7 @@ func checkDoppelgangerRevisit(DoppelgangerHost string, digest string, targetURI 
 	}
 
 	// I don't think there's a need to create a new HTTP client, but it does look a little funky.
-	resp, err := CDXHTTPClient.Do(req)
+	resp, err := DedupeHTTPClient.Do(req)
 	if err != nil {
 		return revisitRecord{}, err
 	}
