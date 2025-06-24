@@ -4,20 +4,14 @@ import (
 	"fmt"
 	"os"
 	"strconv"
-	"sync"
 	"sync/atomic"
 	"time"
 )
-
-var filenameGenerationLock = sync.Mutex{}
 
 // GenerateWarcFileName generate a WARC file name following recommendations
 // of the specs:
 // Prefix-Timestamp-Serial-Crawlhost.warc.gz
 func generateWarcFileName(prefix string, compression string, serial *atomic.Uint64) (fileName string) {
-	filenameGenerationLock.Lock()
-	defer filenameGenerationLock.Unlock()
-
 	// Get host name as reported by the kernel
 	hostName, err := os.Hostname()
 	if err != nil {
@@ -28,9 +22,7 @@ func generateWarcFileName(prefix string, compression string, serial *atomic.Uint
 	serial.CompareAndSwap(99999, 0)
 
 	// Atomically increase the global serial number
-	serial.Add(1)
-
-	formattedSerial := formatSerial(serial, "5")
+	formattedSerial := formatSerial(serial.Add(1), "5")
 
 	now := time.Now().UTC()
 	date := now.Format("20060102150405") + strconv.Itoa(now.Nanosecond())[:3]
@@ -50,8 +42,8 @@ func generateWarcFileName(prefix string, compression string, serial *atomic.Uint
 // formatSerial add the correct padding to the serial
 // E.g. with serial = 23 and format = 5:
 // formatSerial return 00023
-func formatSerial(serial *atomic.Uint64, format string) string {
-	return fmt.Sprintf("%0"+format+"d", serial.Load())
+func formatSerial(serial uint64, format string) string {
+	return fmt.Sprintf("%0"+format+"d", serial)
 }
 
 // isFielSizeExceeded compare the size of a file (filePath) with
