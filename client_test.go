@@ -94,7 +94,7 @@ func TestHTTPClient(t *testing.T) {
 		err             error
 	)
 
-	// Reset counter to 0?
+	// Reset counter to 0
 	DataTotal.Store(0)
 
 	// init test HTTP endpoint
@@ -807,7 +807,7 @@ func TestHTTPClientLocalDedupe(t *testing.T) {
 		err             error
 	)
 
-	// Reset counter to 0?
+	// Reset counter to 0
 	LocalDedupeTotal.Store(0)
 	LocalDedupeTotalBytes.Store(0)
 
@@ -899,7 +899,7 @@ func TestHTTPClientRemoteDedupe(t *testing.T) {
 	// init test HTTP endpoint
 	mux := http.NewServeMux()
 
-	// Reset counter to 0?
+	// Reset counter to 0
 	CDXDedupeTotal.Store(0)
 	CDXDedupeTotalBytes.Store(0)
 
@@ -999,7 +999,7 @@ func TestHTTPClientDoppelgangerDedupe(t *testing.T) {
 	// init test HTTP endpoint
 	mux := http.NewServeMux()
 
-	// Reset counter to 0?
+	// Reset counter to 0
 	DoppelgangerDedupeTotal.Store(0)
 	DoppelgangerDedupeTotalBytes.Store(0)
 
@@ -1094,7 +1094,7 @@ func TestHTTPClientDedupeEmptyPayload(t *testing.T) {
 		err             error
 	)
 
-	// Reset counter to 0?
+	// Reset counter to 0
 	LocalDedupeTotal.Store(0)
 	LocalDedupeTotalBytes.Store(0)
 
