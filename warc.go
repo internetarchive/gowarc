@@ -48,10 +48,6 @@ var (
 	LocalDedupeTotal        atomic.Int64
 )
 
-func init() {
-	// atomic.Int64 counters do not need to be created.
-}
-
 // NewWARCRotator creates and return a channel that can be used
 // to communicate records to be written to WARC files to the
 // recordWriter function running in a goroutine
