@@ -17,7 +17,6 @@ func generateTestDataInKB(size int) []byte {
 
 // TestInMemoryBasic writes data below threshold and verifies it remains in memory.
 func TestInMemoryBasic(t *testing.T) {
-	memoryUsageCache = &globalMemoryCache{}
 	spool := NewSpooledTempFile("test", os.TempDir(), 100, false, -1)
 	defer spool.Close()
 
@@ -67,7 +66,6 @@ func TestInMemoryBasic(t *testing.T) {
 
 // TestThresholdCrossing writes enough data to switch from in-memory to disk.
 func TestThresholdCrossing(t *testing.T) {
-	memoryUsageCache = &globalMemoryCache{}
 	spool := NewSpooledTempFile("test", os.TempDir(), 64*1024, false, -1)
 	defer spool.Close()
 
@@ -117,7 +115,6 @@ func TestThresholdCrossing(t *testing.T) {
 
 // TestForceOnDisk checks the fullOnDisk parameter.
 func TestForceOnDisk(t *testing.T) {
-	memoryUsageCache = &globalMemoryCache{}
 	spool := NewSpooledTempFile("test", os.TempDir(), 64*1024, true, -1)
 	defer spool.Close()
 
@@ -145,7 +142,6 @@ func TestForceOnDisk(t *testing.T) {
 
 // TestReadAtAndSeekInMemory tests seeking and ReadAt on an in-memory spool.
 func TestReadAtAndSeekInMemory(t *testing.T) {
-	memoryUsageCache = &globalMemoryCache{}
 	spool := NewSpooledTempFile("test", os.TempDir(), 64*1024, false, -1)
 	defer spool.Close()
 
@@ -190,7 +186,6 @@ func TestReadAtAndSeekInMemory(t *testing.T) {
 
 // TestReadAtAndSeekOnDisk tests seeking and ReadAt on a spool that has switched to disk.
 func TestReadAtAndSeekOnDisk(t *testing.T) {
-	memoryUsageCache = &globalMemoryCache{}
 	spool := NewSpooledTempFile("test", os.TempDir(), 64*1024, false, -1)
 	defer spool.Close()
 
@@ -227,7 +222,6 @@ func TestReadAtAndSeekOnDisk(t *testing.T) {
 
 // TestWriteAfterReadPanic ensures writing after reading panics per your design.
 func TestWriteAfterReadPanic(t *testing.T) {
-	memoryUsageCache = &globalMemoryCache{}
 	spool := NewSpooledTempFile("test", os.TempDir(), 64*1024, false, -1)
 	defer spool.Close()
 
@@ -261,7 +255,6 @@ func TestWriteAfterReadPanic(t *testing.T) {
 
 // TestCloseInMemory checks closing while still in-memory.
 func TestCloseInMemory(t *testing.T) {
-	memoryUsageCache = &globalMemoryCache{}
 	spool := NewSpooledTempFile("test", os.TempDir(), 64*1024, false, -1)
 
 	_, err := spool.Write([]byte("Small data"))
@@ -292,7 +285,6 @@ func TestCloseInMemory(t *testing.T) {
 
 // TestCloseOnDisk checks closing after spool has switched to disk.
 func TestCloseOnDisk(t *testing.T) {
-	memoryUsageCache = &globalMemoryCache{}
 	spool := NewSpooledTempFile("test", os.TempDir(), 64*1024, false, -1)
 
 	data := generateTestDataInKB(65)
@@ -335,7 +327,6 @@ func TestCloseOnDisk(t *testing.T) {
 
 // TestLen verifies Len() for both in-memory and on-disk states.
 func TestLen(t *testing.T) {
-	memoryUsageCache = &globalMemoryCache{}
 	spool := NewSpooledTempFile("test", os.TempDir(), 64*1024, false, -1)
 	defer spool.Close()
 
@@ -360,7 +351,6 @@ func TestLen(t *testing.T) {
 
 // TestFileName checks correctness of FileName in both modes.
 func TestFileName(t *testing.T) {
-	memoryUsageCache = &globalMemoryCache{}
 	spool := NewSpooledTempFile("testprefix", os.TempDir(), 64*1024, false, -1)
 	defer spool.Close()
 
@@ -483,7 +473,6 @@ func TestBufferGrowthWithinLimits(t *testing.T) {
 
 // TestPoolBehavior verifies that buffers exceeding InitialBufferSize are not returned to the pool.
 func TestPoolBehavior(t *testing.T) {
-	memoryUsageCache = &globalMemoryCache{}
 	spool := NewSpooledTempFile("test", os.TempDir(), 150*1024, false, -1)
 	defer spool.Close()
 
@@ -528,7 +517,6 @@ func TestPoolBehavior(t *testing.T) {
 }
 
 func TestBufferGrowthBeyondNewCap(t *testing.T) {
-	memoryUsageCache = &globalMemoryCache{}
 	spool := NewSpooledTempFile("test", os.TempDir(), 100*1024, false, -1)
 	defer spool.Close()
 
@@ -581,7 +569,6 @@ func TestBufferGrowthBeyondNewCap(t *testing.T) {
 }
 
 func TestSpoolingWhenIOCopy(t *testing.T) {
-	memoryUsageCache = &globalMemoryCache{}
 	spool := NewSpooledTempFile("test", os.TempDir(), 100*1024, false, -1)
 	defer spool.Close()
 
