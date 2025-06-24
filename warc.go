@@ -7,8 +7,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-
-	"github.com/paulbellamy/ratecounter"
 )
 
 // RotatorSettings is used to store the settings
@@ -39,28 +37,28 @@ var (
 	fileMutex sync.Mutex
 
 	// Create a couple of counters for tracking various stats
-	DataTotal *ratecounter.Counter
+	DataTotal *int64
 
-	CDXDedupeTotalBytes          *ratecounter.Counter
-	DoppelgangerDedupeTotalBytes *ratecounter.Counter
-	LocalDedupeTotalBytes        *ratecounter.Counter
+	CDXDedupeTotalBytes          *int64
+	DoppelgangerDedupeTotalBytes *int64
+	LocalDedupeTotalBytes        *int64
 
-	CDXDedupeTotal          *ratecounter.Counter
-	DoppelgangerDedupeTotal *ratecounter.Counter
-	LocalDedupeTotal        *ratecounter.Counter
+	CDXDedupeTotal          *int64
+	DoppelgangerDedupeTotal *int64
+	LocalDedupeTotal        *int64
 )
 
 func init() {
 	// Initialize the counters
-	DataTotal = new(ratecounter.Counter)
+	DataTotal = new(int64)
 
-	CDXDedupeTotalBytes = new(ratecounter.Counter)
-	DoppelgangerDedupeTotalBytes = new(ratecounter.Counter)
-	LocalDedupeTotalBytes = new(ratecounter.Counter)
+	CDXDedupeTotalBytes = new(int64)
+	DoppelgangerDedupeTotalBytes = new(int64)
+	LocalDedupeTotalBytes = new(int64)
 
-	CDXDedupeTotal = new(ratecounter.Counter)
-	DoppelgangerDedupeTotal = new(ratecounter.Counter)
-	LocalDedupeTotal = new(ratecounter.Counter)
+	CDXDedupeTotal = new(int64)
+	DoppelgangerDedupeTotal = new(int64)
+	LocalDedupeTotal = new(int64)
 }
 
 // NewWARCRotator creates and return a channel that can be used

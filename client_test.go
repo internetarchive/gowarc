@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -95,7 +96,7 @@ func TestHTTPClient(t *testing.T) {
 	)
 
 	// Reset counter to 0?
-	DataTotal.Reset()
+	atomic.StoreInt64(DataTotal, 0)
 
 	// init test HTTP endpoint
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -149,7 +150,7 @@ func TestHTTPClient(t *testing.T) {
 	}
 
 	// verify that the remote dedupe count is correct
-	dataTotal := httpClient.DataTotal.Value()
+	dataTotal := atomic.LoadInt64(httpClient.DataTotal)
 	if dataTotal < 27130 || dataTotal > 27160 {
 		t.Fatalf("total bytes downloaded mismatch, expected: 27130-27160 got: %d", dataTotal)
 	}
@@ -808,8 +809,8 @@ func TestHTTPClientLocalDedupe(t *testing.T) {
 	)
 
 	// Reset counter to 0?
-	LocalDedupeTotal.Reset()
-	LocalDedupeTotalBytes.Reset()
+	atomic.StoreInt64(LocalDedupeTotal, 0)
+	atomic.StoreInt64(LocalDedupeTotalBytes, 0)
 
 	// init test HTTP endpoint
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -873,17 +874,18 @@ func TestHTTPClientLocalDedupe(t *testing.T) {
 	}
 
 	// verify that the local dedupe count is correct
-	if LocalDedupeTotalBytes.Value() != 26872 {
-		t.Fatalf("local dedupe total bytes mismatch, expected: 26872 got: %d", LocalDedupeTotalBytes.Value())
+	if atomic.LoadInt64(LocalDedupeTotalBytes) != 26872 {
+		t.Fatalf("local dedupe total bytes mismatch, expected: 26872 got: %d", atomic.LoadInt64(LocalDedupeTotalBytes))
 	}
 
 	// Ensure that HTTP client results work correctly as well
-	if httpClient.LocalDedupeTotalBytes.Value() != 26872 {
-		t.Fatalf("local dedupe total bytes mismatch, expected: 26872 got: %d", httpClient.LocalDedupeTotalBytes.Value())
+	if atomic.LoadInt64(httpClient.LocalDedupeTotalBytes) != 26872 {
+		t.Fatalf("local dedupe total bytes mismatch, expected: 26872 got: %d", atomic.LoadInt64(httpClient.LocalDedupeTotalBytes))
 	}
 
-	if httpClient.LocalDedupeTotal.Value() != 2 {
-		t.Fatalf("local dedupe total mismatch, expected: 2 got: %d", httpClient.LocalDedupeTotal.Value())
+	// 1 is expected due to requiring one request to enter into the table.
+	if atomic.LoadInt64(httpClient.LocalDedupeTotal) != 1 {
+		t.Fatalf("local dedupe total mismatch, expected: 1 got: %d", atomic.LoadInt64(httpClient.LocalDedupeTotal))
 	}
 }
 
@@ -899,8 +901,8 @@ func TestHTTPClientRemoteDedupe(t *testing.T) {
 	mux := http.NewServeMux()
 
 	// Reset counter to 0?
-	CDXDedupeTotal.Reset()
-	CDXDedupeTotalBytes.Reset()
+	atomic.StoreInt64(CDXDedupeTotal, 0)
+	atomic.StoreInt64(CDXDedupeTotalBytes, 0)
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		fileBytes, err := os.ReadFile(path.Join("testdata", "image.svg"))
@@ -973,21 +975,20 @@ func TestHTTPClientRemoteDedupe(t *testing.T) {
 	}
 
 	// verify that the remote dedupe count is correct
-	if CDXDedupeTotalBytes.Value() != 55896 {
-		t.Fatalf("remote dedupe total bytes mismatch, expected: 55896 got: %d", CDXDedupeTotalBytes.Value())
+	if atomic.LoadInt64(CDXDedupeTotalBytes) != 107488 {
+		t.Fatalf("remote dedupe total bytes mismatch, expected: 107488 got: %d", atomic.LoadInt64(CDXDedupeTotalBytes))
 	}
 
 	// Ensure that HTTP client results work correctly as well
-	if httpClient.CDXDedupeTotalBytes.Value() != 55896 {
-		t.Fatalf("remote dedupe total bytes mismatch, expected: 55896 got: %d", httpClient.CDXDedupeTotalBytes.Value())
+	if atomic.LoadInt64(httpClient.CDXDedupeTotalBytes) != 107488 {
+		t.Fatalf("remote dedupe total bytes mismatch, expected: 107488 got: %d", atomic.LoadInt64(httpClient.CDXDedupeTotalBytes))
 	}
 
-	if httpClient.CDXDedupeTotal.Value() != 4 {
-		t.Fatalf("remote dedupe total mismatch, expected: 4 got: %d", httpClient.CDXDedupeTotal.Value())
+	if atomic.LoadInt64(httpClient.CDXDedupeTotal) != 4 {
+		t.Fatalf("remote dedupe total mismatch, expected: 4 got: %d", atomic.LoadInt64(httpClient.CDXDedupeTotal))
 	}
 }
 
-// TODO: figure out why test returns two different numbers depending on if run together or seperately.
 func TestHTTPClientDoppelgangerDedupe(t *testing.T) {
 	var (
 		dedupePath      = "/api/records/UIRWL5DFIPQ4MX3D3GFHM2HCVU3TZ6I3"
@@ -1000,8 +1001,8 @@ func TestHTTPClientDoppelgangerDedupe(t *testing.T) {
 	mux := http.NewServeMux()
 
 	// Reset counter to 0?
-	DoppelgangerDedupeTotal.Reset()
-	DoppelgangerDedupeTotalBytes.Reset()
+	atomic.StoreInt64(DoppelgangerDedupeTotal, 0)
+	atomic.StoreInt64(DoppelgangerDedupeTotalBytes, 0)
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		fileBytes, err := os.ReadFile(path.Join("testdata", "image.svg"))
@@ -1073,17 +1074,17 @@ func TestHTTPClientDoppelgangerDedupe(t *testing.T) {
 	}
 
 	// verify that the remote dedupe count is correct
-	if DoppelgangerDedupeTotalBytes.Value() != 107488 {
-		t.Fatalf("remote dedupe total bytes mismatch, expected: 107488 got: %d", DoppelgangerDedupeTotalBytes.Value())
+	if atomic.LoadInt64(DoppelgangerDedupeTotalBytes) != 107488 {
+		t.Fatalf("remote dedupe total bytes mismatch, expected: 107488 got: %d", atomic.LoadInt64(DoppelgangerDedupeTotalBytes))
 	}
 
 	// Ensure that HTTP client results work correctly as well
-	if httpClient.DoppelgangerDedupeTotalBytes.Value() != 107488 {
-		t.Fatalf("remote dedupe total bytes mismatch, expected: 107488 got: %d", httpClient.DoppelgangerDedupeTotalBytes.Value())
+	if atomic.LoadInt64(httpClient.DoppelgangerDedupeTotalBytes) != 107488 {
+		t.Fatalf("remote dedupe total bytes mismatch, expected: 107488 got: %d", atomic.LoadInt64(httpClient.DoppelgangerDedupeTotalBytes))
 	}
 
-	if httpClient.DoppelgangerDedupeTotal.Value() != 4 {
-		t.Fatalf("remote dedupe total mismatch, expected: 4 got: %d", httpClient.DoppelgangerDedupeTotal.Value())
+	if atomic.LoadInt64(httpClient.DoppelgangerDedupeTotal) != 4 {
+		t.Fatalf("remote dedupe total mismatch, expected: 4 got: %d", atomic.LoadInt64(httpClient.DoppelgangerDedupeTotal))
 	}
 }
 
@@ -1095,8 +1096,8 @@ func TestHTTPClientDedupeEmptyPayload(t *testing.T) {
 	)
 
 	// Reset counter to 0?
-	LocalDedupeTotal.Reset()
-	LocalDedupeTotalBytes.Reset()
+	atomic.StoreInt64(LocalDedupeTotal, 0)
+	atomic.StoreInt64(LocalDedupeTotalBytes, 0)
 
 	// init test HTTP endpoint
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1157,17 +1158,17 @@ func TestHTTPClientDedupeEmptyPayload(t *testing.T) {
 	}
 
 	// verify that the local dedupe count is correct
-	if LocalDedupeTotalBytes.Value() != 0 {
-		t.Fatalf("local dedupe total bytes mismatch, expected: 0 got: %d", LocalDedupeTotalBytes.Value())
+	if atomic.LoadInt64(LocalDedupeTotalBytes) != 0 {
+		t.Fatalf("local dedupe total bytes mismatch, expected: 0 got: %d", atomic.LoadInt64(LocalDedupeTotalBytes))
 	}
 
 	// Ensure that HTTP client results work correctly as well
-	if httpClient.LocalDedupeTotalBytes.Value() != 0 {
-		t.Fatalf("local dedupe total bytes mismatch, expected: 0 got: %d", httpClient.LocalDedupeTotalBytes.Value())
+	if atomic.LoadInt64(httpClient.LocalDedupeTotalBytes) != 0 {
+		t.Fatalf("local dedupe total bytes mismatch, expected: 0 got: %d", atomic.LoadInt64(httpClient.LocalDedupeTotalBytes))
 	}
 
-	if httpClient.LocalDedupeTotal.Value() != 0 {
-		t.Fatalf("local dedupe total mismatch, expected: 0 got: %d", httpClient.LocalDedupeTotal.Value())
+	if atomic.LoadInt64(httpClient.LocalDedupeTotal) != 0 {
+		t.Fatalf("local dedupe total mismatch, expected: 0 got: %d", atomic.LoadInt64(httpClient.LocalDedupeTotal))
 	}
 }
 

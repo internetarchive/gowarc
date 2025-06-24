@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -501,21 +502,28 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 	if bytesCopied >= int64(d.client.dedupeOptions.SizeThreshold) && payloadDigest != "3I42H3S6NNFQ2MSVX7XZKYAYSCX5QBYJ" {
 		if d.client.dedupeOptions.LocalDedupe {
 			revisit = d.checkLocalRevisit(payloadDigest)
-			LocalDedupeTotalBytes.Incr(int64(revisit.size))
-			LocalDedupeTotal.Incr(1)
+			if revisit.targetURI != "" {
+				atomic.AddInt64(LocalDedupeTotalBytes, int64(revisit.size))
+				atomic.AddInt64(LocalDedupeTotal, 1)
+			}
 		}
 
 		if d.client.dedupeOptions.DoppelgangerDedupe && revisit.targetURI == "" {
 			revisit, _ = checkDoppelgangerRevisit(d.client.dedupeOptions.DoppelgangerHost, payloadDigest, warcTargetURI)
-			DoppelgangerDedupeTotalBytes.Incr(bytesCopied)
-			DoppelgangerDedupeTotal.Incr(1)
+			if revisit.targetURI != "" {
+				atomic.AddInt64(DoppelgangerDedupeTotalBytes, int64(bytesCopied))
+				atomic.AddInt64(DoppelgangerDedupeTotal, 1)
+			}
 		}
 
 		// Allow both to be checked. If local dedupe does not find anything, check Doppelganger (if set) then CDX (if set).
 		if d.client.dedupeOptions.CDXDedupe && revisit.targetURI == "" {
 			revisit, _ = checkCDXRevisit(d.client.dedupeOptions.CDXURL, payloadDigest, warcTargetURI, d.client.dedupeOptions.CDXCookie)
-			CDXDedupeTotalBytes.Incr(int64(revisit.size))
-			CDXDedupeTotal.Incr(1)
+			// TODO/Note: revisit.size is the compressed size from CDX. We used to use it but maybe we should? Something to consider but for now we are using bytesCopied like Doppelganger.
+			if revisit.targetURI != "" {
+				atomic.AddInt64(CDXDedupeTotalBytes, int64(bytesCopied))
+				atomic.AddInt64(CDXDedupeTotal, 1)
+			}
 		}
 	}
 

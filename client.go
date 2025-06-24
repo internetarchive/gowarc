@@ -5,8 +5,6 @@ import (
 	"os"
 	"sync"
 	"time"
-
-	"github.com/paulbellamy/ratecounter"
 )
 
 type Error struct {
@@ -60,15 +58,15 @@ type CustomHTTPClient struct {
 	// If set to <= 0, the default value is DefaultMaxRAMUsageFraction.
 	MaxRAMUsageFraction float64
 	randomLocalIP       bool
-	DataTotal           *ratecounter.Counter
+	DataTotal           *int64
 
-	CDXDedupeTotalBytes          *ratecounter.Counter
-	DoppelgangerDedupeTotalBytes *ratecounter.Counter
-	LocalDedupeTotalBytes        *ratecounter.Counter
+	CDXDedupeTotalBytes          *int64
+	DoppelgangerDedupeTotalBytes *int64
+	LocalDedupeTotalBytes        *int64
 
-	CDXDedupeTotal          *ratecounter.Counter
-	DoppelgangerDedupeTotal *ratecounter.Counter
-	LocalDedupeTotal        *ratecounter.Counter
+	CDXDedupeTotal          *int64
+	DoppelgangerDedupeTotal *int64
+	LocalDedupeTotal        *int64
 }
 
 func (c *CustomHTTPClient) Close() error {

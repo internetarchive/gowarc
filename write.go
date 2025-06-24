@@ -6,6 +6,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/internetarchive/gowarc/pkg/spooledtempfile"
@@ -101,7 +102,7 @@ func (w *Writer) WriteRecord(r *Record) (recordID string, err error) {
 	}
 
 	if written > 0 {
-		DataTotal.Incr(written)
+		atomic.AddInt64(DataTotal, written)
 	}
 
 	if _, err := io.WriteString(w.FileWriter, "\r\n\r\n"); err != nil {
