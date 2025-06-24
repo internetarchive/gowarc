@@ -46,10 +46,8 @@ type ReaderAt interface {
 
 // ReadSeekCloser is an io.Reader + ReaderAt + io.Seeker + io.Closer + Stat
 type ReadSeekCloser interface {
-	io.Reader
-	io.Seeker
+	io.ReadSeekCloser
 	ReaderAt
-	io.Closer
 	FileName() string
 	Len() int
 }
