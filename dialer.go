@@ -519,7 +519,6 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 
 		if d.client.dedupeOptions.CDXDedupe && revisit.targetURI == "" {
 			revisit, _ = checkCDXRevisit(d.client.dedupeOptions.CDXURL, payloadDigest, warcTargetURI, d.client.dedupeOptions.CDXCookie)
-			// TODO/Note: revisit.size is the compressed size from CDX. We used to use it but maybe we should? Something to consider but for now we are using bytesCopied like Doppelganger.
 			if revisit.targetURI != "" {
 				atomic.AddInt64(CDXDedupeTotalBytes, int64(bytesCopied))
 				atomic.AddInt64(CDXDedupeTotal, 1)
