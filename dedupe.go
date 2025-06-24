@@ -83,8 +83,8 @@ func checkCDXRevisit(CDXURL string, digest string, targetURI string, cookie stri
 	return revisitRecord{}, nil
 }
 
-func checkDoppelgangerRevisit(DoppelgangerHost string, digest string) (revisitRecord, error) {
-	req, err := http.NewRequest("GET", DoppelgangerHost+"/api/records/"+digest, nil)
+func checkDoppelgangerRevisit(DoppelgangerHost string, digest string, targetURI string) (revisitRecord, error) {
+	req, err := http.NewRequest("GET", DoppelgangerHost+"/api/records/"+digest+"?uri="+targetURI, nil)
 	if err != nil {
 		return revisitRecord{}, err
 	}

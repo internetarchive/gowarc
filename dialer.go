@@ -506,7 +506,7 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 		}
 
 		if d.client.dedupeOptions.DoppelgangerDedupe && revisit.targetURI == "" {
-			revisit, _ = checkDoppelgangerRevisit(d.client.dedupeOptions.DoppelgangerHost, payloadDigest)
+			revisit, _ = checkDoppelgangerRevisit(d.client.dedupeOptions.DoppelgangerHost, payloadDigest, warcTargetURI)
 			DoppelgangerDedupeTotalBytes.Incr(bytesCopied)
 			DoppelgangerDedupeTotal.Incr(1)
 		}
