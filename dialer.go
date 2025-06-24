@@ -626,33 +626,14 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 	return nil
 }
 
-func (d *customDialer) readRequest(ctx context.Context, scheme string, reqPipe *io.PipeReader, targetURITxCh chan string, recordChan chan *Record) error {
-	defer close(targetURITxCh)
-
-	var (
-		warcTargetURI = scheme + "://"
-		requestRecord = NewRecord(d.client.TempDir, d.client.FullOnDisk)
-	)
-
-	// Initialize the request record
-	requestRecord.Header.Set("WARC-Type", "request")
-	requestRecord.Header.Set("Content-Type", "application/http; msgtype=request")
-
-	// Copy the content from the pipe
-	_, err := io.Copy(requestRecord.Content, reqPipe)
-	if err != nil {
-		return fmt.Errorf("readRequest: io.Copy failed: %s", err.Error())
+func parseRequestTargetURI(scheme string, content io.ReadSeeker) (string, error) {
+	// Ensure the reader is at the beginning
+	if _, err := content.Seek(0, io.SeekStart); err != nil {
+		return "", fmt.Errorf("parseRequestTargetURI: seek failed: %w", err)
 	}
 
-	// Seek to the beginning of the content to allow reading
-	if _, err := requestRecord.Content.Seek(0, io.SeekStart); err != nil {
-		return fmt.Errorf("readRequest: seek failed: %s", err.Error())
-	}
+	reader := bufio.NewReaderSize(content, 4096)
 
-	// Use a buffered reader for efficient parsing
-	reader := bufio.NewReaderSize(requestRecord.Content, 4096) // 4KB buffer
-
-	// State machine to parse the request
 	const (
 		stateRequestLine = iota
 		stateHeaders
@@ -667,18 +648,12 @@ func (d *customDialer) readRequest(ctx context.Context, scheme string, reqPipe *
 	)
 
 	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-
 		line, err := reader.ReadString('\n')
 		if err != nil {
 			if err == io.EOF {
 				break
 			}
-			return fmt.Errorf("readRequest: failed to read line: %v", err)
+			return "", fmt.Errorf("parseRequestTargetURI: read line failed: %w", err)
 		}
 
 		line = strings.TrimSpace(line)
@@ -699,9 +674,8 @@ func (d *customDialer) readRequest(ctx context.Context, scheme string, reqPipe *
 			if line == "" {
 				break // End of headers
 			}
-
-			if strings.HasPrefix(line, "Host: ") {
-				host = strings.TrimPrefix(line, "Host: ")
+			if strings.HasPrefix(strings.ToLower(line), "host: ") {
+				host = strings.TrimSpace(line[6:])
 				foundHost = true
 			}
 		}
@@ -712,16 +686,33 @@ func (d *customDialer) readRequest(ctx context.Context, scheme string, reqPipe *
 		}
 	}
 
-	// Check that we successfully parsed all necessary data
-	if host != "" && target != "" {
-		// HTTP's request first line can include a complete path, we check that
-		if strings.HasPrefix(target, scheme+"://"+host) {
-			warcTargetURI = target
-		} else {
-			warcTargetURI += host + target
-		}
-	} else {
-		return errors.New("unable to parse data necessary for WARC-Target-URI")
+	if !foundTarget || !foundHost {
+		return "", errors.New("parseRequestTargetURI: failed to parse host and target from request")
+	}
+
+	if strings.HasPrefix(target, scheme+"://"+host) {
+		return target, nil
+	}
+	return fmt.Sprintf("%s://%s%s", scheme, host, target), nil
+}
+
+func (d *customDialer) readRequest(ctx context.Context, scheme string, reqPipe *io.PipeReader, targetURITxCh chan string, recordChan chan *Record) error {
+	defer close(targetURITxCh)
+
+	// Initialize the request record
+	requestRecord := NewRecord(d.client.TempDir, d.client.FullOnDisk)
+	requestRecord.Header.Set("WARC-Type", "request")
+	requestRecord.Header.Set("Content-Type", "application/http; msgtype=request")
+
+	// Copy the content from the pipe
+	_, err := io.Copy(requestRecord.Content, reqPipe)
+	if err != nil {
+		return fmt.Errorf("readRequest: io.Copy failed: %s", err.Error())
+	}
+
+	warcTargetURI, err := parseRequestTargetURI(scheme, requestRecord.Content)
+	if err != nil {
+		return fmt.Errorf("readRequest: %w", err)
 	}
 
 	// Send the WARC-Target-URI to a channel so that it can be picked up
