@@ -36,6 +36,8 @@ type customDialer struct {
 	disableIPv6 bool
 }
 
+var emptyPayloadDigest = "3I42H3S6NNFQ2MSVX7XZKYAYSCX5QBYJ"
+
 func newCustomDialer(httpClient *CustomHTTPClient, proxyURL string, DialTimeout, DNSRecordsTTL, DNSResolutionTimeout time.Duration, DNSCacheSize int, DNSServers []string, disableIPv4, disableIPv6 bool) (d *customDialer, err error) {
 	d = new(customDialer)
 
@@ -399,7 +401,7 @@ func (d *customDialer) writeWARCFromConnection(ctx context.Context, reqPipe, res
 			r.Header.Set("Content-Length", strconv.Itoa(getContentLength(r.Content)))
 
 			if d.client.dedupeOptions.LocalDedupe {
-				if r.Header.Get("WARC-Type") == "response" && r.Header.Get("WARC-Payload-Digest")[5:] != "3I42H3S6NNFQ2MSVX7XZKYAYSCX5QBYJ" {
+				if r.Header.Get("WARC-Type") == "response" && r.Header.Get("WARC-Payload-Digest")[5:] != emptyPayloadDigest {
 					d.client.dedupeHashTable.Store(r.Header.Get("WARC-Payload-Digest")[5:], revisitRecord{
 						responseUUID: recordIDs[i],
 						size:         getContentLength(r.Content),
@@ -499,7 +501,7 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 
 	// Write revisit record if local, CDX, or Doppelganger dedupe is activated and finds match.
 	var revisit = revisitRecord{}
-	if bytesCopied >= int64(d.client.dedupeOptions.SizeThreshold) && payloadDigest != "3I42H3S6NNFQ2MSVX7XZKYAYSCX5QBYJ" {
+	if bytesCopied >= int64(d.client.dedupeOptions.SizeThreshold) && payloadDigest != emptyPayloadDigest {
 		if d.client.dedupeOptions.LocalDedupe {
 			revisit = d.checkLocalRevisit(payloadDigest)
 			if revisit.targetURI != "" {
@@ -526,7 +528,7 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 		}
 	}
 
-	if revisit.targetURI != "" && payloadDigest != "3I42H3S6NNFQ2MSVX7XZKYAYSCX5QBYJ" {
+	if revisit.targetURI != "" && payloadDigest != emptyPayloadDigest {
 		responseRecord.Header.Set("WARC-Type", "revisit")
 		responseRecord.Header.Set("WARC-Refers-To-Target-URI", revisit.targetURI)
 		responseRecord.Header.Set("WARC-Refers-To-Date", revisit.date)
