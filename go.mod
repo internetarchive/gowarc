@@ -3,7 +3,6 @@ module github.com/internetarchive/gowarc
 go 1.24.2
 
 require (
-	github.com/armon/go-socks5 v0.0.0-20160902184237-e75332964ef5
 	github.com/google/uuid v1.6.0
 	github.com/klauspost/compress v1.18.0
 	github.com/maypok86/otter v1.2.4
@@ -12,6 +11,7 @@ require (
 	github.com/refraction-networking/utls v1.6.7
 	github.com/remeh/sizedwaitgroup v1.0.0
 	github.com/spf13/cobra v1.9.1
+	github.com/things-go/go-socks5 v0.0.6
 	github.com/ulikunitz/xz v0.5.12
 	go.uber.org/goleak v1.3.0
 	golang.org/x/net v0.39.0

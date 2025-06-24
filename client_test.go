@@ -21,7 +21,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/armon/go-socks5"
+	"github.com/things-go/go-socks5"
 )
 
 // errorReadCloser simulates a failure during reading.
@@ -562,11 +562,7 @@ func TestHTTPClientWithProxy(t *testing.T) {
 	)
 
 	// init socks5 proxy server
-	conf := &socks5.Config{}
-	proxyServer, err := socks5.New(conf)
-	if err != nil {
-		panic(err)
-	}
+	proxyServer := socks5.NewServer()
 
 	// Create a channel to signal server stop
 	stopChan := make(chan struct{})
