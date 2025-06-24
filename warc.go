@@ -7,8 +7,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-
-	"github.com/paulbellamy/ratecounter"
 )
 
 // RotatorSettings is used to store the settings
@@ -38,19 +36,17 @@ var (
 	// Create mutex to ensure we are generating WARC files one at a time and not naming them the same thing.
 	fileMutex sync.Mutex
 
-	// Create a counter to keep track of the number of bytes written to WARC files
-	// and the number of bytes deduped
-	DataTotal         *ratecounter.Counter
-	RemoteDedupeTotal *ratecounter.Counter
-	LocalDedupeTotal  *ratecounter.Counter
-)
+	// Create a couple of counters for tracking various stats
+	DataTotal atomic.Int64
 
-func init() {
-	// Initialize the counters
-	DataTotal = new(ratecounter.Counter)
-	RemoteDedupeTotal = new(ratecounter.Counter)
-	LocalDedupeTotal = new(ratecounter.Counter)
-}
+	CDXDedupeTotalBytes          atomic.Int64
+	DoppelgangerDedupeTotalBytes atomic.Int64
+	LocalDedupeTotalBytes        atomic.Int64
+
+	CDXDedupeTotal          atomic.Int64
+	DoppelgangerDedupeTotal atomic.Int64
+	LocalDedupeTotal        atomic.Int64
+)
 
 // NewWARCRotator creates and return a channel that can be used
 // to communicate records to be written to WARC files to the

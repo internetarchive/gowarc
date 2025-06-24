@@ -35,6 +35,8 @@ type customDialer struct {
 	disableIPv6 bool
 }
 
+var emptyPayloadDigest = "3I42H3S6NNFQ2MSVX7XZKYAYSCX5QBYJ"
+
 func newCustomDialer(httpClient *CustomHTTPClient, proxyURL string, DialTimeout, DNSRecordsTTL, DNSResolutionTimeout time.Duration, DNSCacheSize int, DNSServers []string, disableIPv4, disableIPv6 bool) (d *customDialer, err error) {
 	d = new(customDialer)
 
@@ -398,7 +400,7 @@ func (d *customDialer) writeWARCFromConnection(ctx context.Context, reqPipe, res
 			r.Header.Set("Content-Length", strconv.Itoa(getContentLength(r.Content)))
 
 			if d.client.dedupeOptions.LocalDedupe {
-				if r.Header.Get("WARC-Type") == "response" && r.Header.Get("WARC-Payload-Digest")[5:] != "3I42H3S6NNFQ2MSVX7XZKYAYSCX5QBYJ" {
+				if r.Header.Get("WARC-Type") == "response" && r.Header.Get("WARC-Payload-Digest")[5:] != emptyPayloadDigest {
 					d.client.dedupeHashTable.Store(r.Header.Get("WARC-Payload-Digest")[5:], revisitRecord{
 						responseUUID: recordIDs[i],
 						size:         getContentLength(r.Content),
@@ -496,23 +498,36 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 
 	responseRecord.Header.Set("WARC-Payload-Digest", "sha1:"+payloadDigest)
 
-	// Write revisit record if local or CDX dedupe is activated
+	// Write revisit record if local, CDX, or Doppelganger dedupe is activated and finds match.
 	var revisit = revisitRecord{}
-	if bytesCopied >= int64(d.client.dedupeOptions.SizeThreshold) {
+	if bytesCopied >= int64(d.client.dedupeOptions.SizeThreshold) && payloadDigest != emptyPayloadDigest {
 		if d.client.dedupeOptions.LocalDedupe {
 			revisit = d.checkLocalRevisit(payloadDigest)
-
-			LocalDedupeTotal.Incr(int64(revisit.size))
+			if revisit.targetURI != "" {
+				LocalDedupeTotalBytes.Add(int64(revisit.size))
+				LocalDedupeTotal.Add(1)
+			}
 		}
 
-		// Allow both to be checked. If local dedupe does not find anything, check CDX (if set).
+		// If local dedupe does not find anything, we will check Doppelganger (if set) then CDX (if set).
+		if d.client.dedupeOptions.DoppelgangerDedupe && revisit.targetURI == "" {
+			revisit, _ = checkDoppelgangerRevisit(d.client.dedupeOptions.DoppelgangerHost, payloadDigest, warcTargetURI)
+			if revisit.targetURI != "" {
+				DoppelgangerDedupeTotalBytes.Add(bytesCopied)
+				DoppelgangerDedupeTotal.Add(1)
+			}
+		}
+
 		if d.client.dedupeOptions.CDXDedupe && revisit.targetURI == "" {
 			revisit, _ = checkCDXRevisit(d.client.dedupeOptions.CDXURL, payloadDigest, warcTargetURI, d.client.dedupeOptions.CDXCookie)
-			RemoteDedupeTotal.Incr(int64(revisit.size))
+			if revisit.targetURI != "" {
+				CDXDedupeTotalBytes.Add(bytesCopied)
+				CDXDedupeTotal.Add(1)
+			}
 		}
 	}
 
-	if revisit.targetURI != "" && payloadDigest != "3I42H3S6NNFQ2MSVX7XZKYAYSCX5QBYJ" {
+	if revisit.targetURI != "" && payloadDigest != emptyPayloadDigest {
 		responseRecord.Header.Set("WARC-Type", "revisit")
 		responseRecord.Header.Set("WARC-Refers-To-Target-URI", revisit.targetURI)
 		responseRecord.Header.Set("WARC-Refers-To-Date", revisit.date)
