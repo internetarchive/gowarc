@@ -70,7 +70,7 @@ func setup(t *testing.T) (*customDialer, *CustomHTTPClient, func()) {
 	cleanup := func() {
 		err = httpClient.Close()
 		if err != nil {
-			panic(err)
+			t.Fatalf("cleanup failed: %v", err)
 		}
 		d.DNSRecords.Close()
 		os.RemoveAll(rotatorSettings.OutputDirectory)
@@ -155,7 +155,8 @@ func TestDNSCaching(t *testing.T) {
 	defer cleanup()
 
 	d.DNSConfig.Servers = []string{publicDNS}
-	_, cached, err := d.archiveDNS(context.Background(), target)
+	ctx := context.Background()
+	_, cached, err := d.archiveDNS(ctx, target)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +164,7 @@ func TestDNSCaching(t *testing.T) {
 		t.Error("Expected uncached result")
 	}
 
-	_, cached, err = d.archiveDNS(context.Background(), target)
+	_, cached, err = d.archiveDNS(ctx, target)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +172,7 @@ func TestDNSCaching(t *testing.T) {
 		t.Error("Expected cached result")
 	}
 
-	_, cached, err = d.archiveDNS(context.Background(), target1)
+	_, cached, err = d.archiveDNS(ctx, target1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +180,7 @@ func TestDNSCaching(t *testing.T) {
 		t.Error("Expected uncached result")
 	}
 
-	_, cached, err = d.archiveDNS(context.Background(), target)
+	_, cached, err = d.archiveDNS(ctx, target)
 	if err != nil {
 		t.Fatal(err)
 	}
