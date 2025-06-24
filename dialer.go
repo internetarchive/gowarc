@@ -13,7 +13,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -505,8 +504,8 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 		if d.client.dedupeOptions.LocalDedupe {
 			revisit = d.checkLocalRevisit(payloadDigest)
 			if revisit.targetURI != "" {
-				atomic.AddInt64(LocalDedupeTotalBytes, int64(revisit.size))
-				atomic.AddInt64(LocalDedupeTotal, 1)
+				LocalDedupeTotalBytes.Add(int64(revisit.size))
+				LocalDedupeTotal.Add(1)
 			}
 		}
 
@@ -514,16 +513,16 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 		if d.client.dedupeOptions.DoppelgangerDedupe && revisit.targetURI == "" {
 			revisit, _ = checkDoppelgangerRevisit(d.client.dedupeOptions.DoppelgangerHost, payloadDigest, warcTargetURI)
 			if revisit.targetURI != "" {
-				atomic.AddInt64(DoppelgangerDedupeTotalBytes, int64(bytesCopied))
-				atomic.AddInt64(DoppelgangerDedupeTotal, 1)
+				DoppelgangerDedupeTotalBytes.Add(bytesCopied)
+				DoppelgangerDedupeTotal.Add(1)
 			}
 		}
 
 		if d.client.dedupeOptions.CDXDedupe && revisit.targetURI == "" {
 			revisit, _ = checkCDXRevisit(d.client.dedupeOptions.CDXURL, payloadDigest, warcTargetURI, d.client.dedupeOptions.CDXCookie)
 			if revisit.targetURI != "" {
-				atomic.AddInt64(CDXDedupeTotalBytes, int64(bytesCopied))
-				atomic.AddInt64(CDXDedupeTotal, 1)
+				CDXDedupeTotalBytes.Add(bytesCopied)
+				CDXDedupeTotal.Add(1)
 			}
 		}
 	}

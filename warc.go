@@ -37,28 +37,19 @@ var (
 	fileMutex sync.Mutex
 
 	// Create a couple of counters for tracking various stats
-	DataTotal *int64
+	DataTotal atomic.Int64
 
-	CDXDedupeTotalBytes          *int64
-	DoppelgangerDedupeTotalBytes *int64
-	LocalDedupeTotalBytes        *int64
+	CDXDedupeTotalBytes          atomic.Int64
+	DoppelgangerDedupeTotalBytes atomic.Int64
+	LocalDedupeTotalBytes        atomic.Int64
 
-	CDXDedupeTotal          *int64
-	DoppelgangerDedupeTotal *int64
-	LocalDedupeTotal        *int64
+	CDXDedupeTotal          atomic.Int64
+	DoppelgangerDedupeTotal atomic.Int64
+	LocalDedupeTotal        atomic.Int64
 )
 
 func init() {
-	// Initialize the counters
-	DataTotal = new(int64)
-
-	CDXDedupeTotalBytes = new(int64)
-	DoppelgangerDedupeTotalBytes = new(int64)
-	LocalDedupeTotalBytes = new(int64)
-
-	CDXDedupeTotal = new(int64)
-	DoppelgangerDedupeTotal = new(int64)
-	LocalDedupeTotal = new(int64)
+	// atomic.Int64 counters do not need to be created.
 }
 
 // NewWARCRotator creates and return a channel that can be used
