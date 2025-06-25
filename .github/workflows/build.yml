@@ -1,0 +1,26 @@
+on:
+  release:
+    types: [created]
+
+permissions:
+    contents: write
+    packages: write
+
+jobs:
+  release-linux-amd64:
+    name: release linux/amd64
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: wangyoucao577/go-release-action@481a2c1a0f1be199722e3e9b74d7199acafc30a8 #release/rel-v1.53
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        goos: linux
+        goarch: amd64
+        goversion: 'go.mod'
+        compress_assets: OFF
+        md5sum: FALSE
+        sha256sum: TRUE
+        project_path: './cmd'
+        binary_name: 'warc'
+        asset_name: 'warc-linux-amd64'
