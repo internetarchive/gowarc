@@ -467,17 +467,15 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 
 	// Initialize the response record
 	var responseRecord = NewRecord(d.client.TempDir, d.client.FullOnDisk)
+
+	recordChan <- responseRecord
+
 	responseRecord.Header.Set("WARC-Type", "response")
 	responseRecord.Header.Set("Content-Type", "application/http; msgtype=response")
 
 	// Read the response from the pipe
 	bytesCopied, err := io.Copy(responseRecord.Content, respPipe)
 	if err != nil {
-		closeErr := responseRecord.Content.Close()
-		if closeErr != nil {
-			return fmt.Errorf("readResponse: io.Copy failed and closing content failed: %s", closeErr.Error())
-		}
-
 		return fmt.Errorf("readResponse: io.Copy failed: %s", err.Error())
 	}
 
@@ -489,11 +487,6 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 
 	resp, err := http.ReadResponse(bufio.NewReader(responseRecord.Content), nil)
 	if err != nil {
-		closeErr := responseRecord.Content.Close()
-		if closeErr != nil {
-			return fmt.Errorf("readResponse: http.ReadResponse failed and closing content failed: %s", closeErr.Error())
-		}
-
 		return err
 	}
 
@@ -513,10 +506,6 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 		if err != nil {
 			return &DiscardHookError{URL: warcTargetURI, Reason: reason, Err: fmt.Errorf("closing body failed: %w", err)}
 		}
-		err = responseRecord.Content.Close()
-		if err != nil {
-			return &DiscardHookError{URL: warcTargetURI, Reason: reason, Err: fmt.Errorf("closing content failed: %w", err)}
-		}
 
 		return &DiscardHookError{URL: warcTargetURI, Reason: reason, Err: nil}
 	}
@@ -524,12 +513,7 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 	// Calculate the WARC-Payload-Digest
 	payloadDigest := GetSHA1(resp.Body)
 	if strings.HasPrefix(payloadDigest, "ERROR: ") {
-		closeErr := responseRecord.Content.Close()
-		if closeErr != nil {
-			return fmt.Errorf("readResponse: SHA1 calculation failed and closing content failed: %s", closeErr.Error())
-		}
-
-		// This should _never_ happen.
+		// This should happen if the connection was closed halfway through reading the response body
 		return fmt.Errorf("readResponse: SHA1 ran into an unrecoverable error: %s url: %s", payloadDigest, warcTargetURI)
 	}
 
@@ -678,8 +662,6 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 		responseRecord.Content = tempBuffer
 	}
 
-	recordChan <- responseRecord
-
 	return nil
 }
 
@@ -758,6 +740,9 @@ func (d *customDialer) readRequest(ctx context.Context, scheme string, reqPipe *
 
 	// Initialize the request record
 	requestRecord := NewRecord(d.client.TempDir, d.client.FullOnDisk)
+
+	recordChan <- requestRecord
+
 	requestRecord.Header.Set("WARC-Type", "request")
 	requestRecord.Header.Set("Content-Type", "application/http; msgtype=request")
 
@@ -778,13 +763,6 @@ func (d *customDialer) readRequest(ctx context.Context, scheme string, reqPipe *
 	case <-ctx.Done():
 		return ctx.Err()
 	case targetURITxCh <- warcTargetURI:
-	}
-
-	// Send the request record to the channel for further processing
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case recordChan <- requestRecord:
 	}
 
 	return nil
