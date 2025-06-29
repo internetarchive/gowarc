@@ -86,46 +86,54 @@ func newCustomDialer(httpClient *CustomHTTPClient, proxyURL string, DialTimeout,
 	return d, nil
 }
 
-type customConnection struct {
+type CustomConnection struct {
 	net.Conn
 	io.Reader
 	io.Writer
-	closers []io.Closer
+	closers []*io.PipeWriter
 	sync.WaitGroup
 }
 
-func (cc *customConnection) Read(b []byte) (int, error) {
-	return cc.Reader.Read(b)
+func (cc *CustomConnection) Read(b []byte) (int, error) {
+	c, err := cc.Reader.Read(b)
+	if err != nil {
+		cc.CloseWithError(err)
+	}
+	return c, err
 }
 
-func (cc *customConnection) Write(b []byte) (int, error) {
+func (cc *CustomConnection) Write(b []byte) (int, error) {
 	return cc.Writer.Write(b)
 }
 
-func (cc *customConnection) Close() error {
+func (cc *CustomConnection) Close() error {
+	return cc.CloseWithError(nil)
+}
+
+func (cc *CustomConnection) CloseWithError(err error) error {
 	for _, c := range cc.closers {
-		err := c.Close()
-		if err != nil {
-			return err
+		if closeErr := c.CloseWithError(err); closeErr != nil {
+			return fmt.Errorf("CloseWithError: closing pipe writer failed: %w", closeErr)
 		}
 	}
 
 	return cc.Conn.Close()
 }
 
-func (d *customDialer) wrapConnection(ctx context.Context, c net.Conn, scheme string) net.Conn {
+func (d *customDialer) wrapConnection(ctx context.Context, c net.Conn, scheme string) *CustomConnection {
 	reqReader, reqWriter := io.Pipe()
 	respReader, respWriter := io.Pipe()
 
 	d.client.WaitGroup.Add(1)
 	go d.writeWARCFromConnection(ctx, reqReader, respReader, scheme, c)
 
-	return &customConnection{
+	wrappedConn := &CustomConnection{
 		Conn:    c,
-		closers: []io.Closer{reqWriter, respWriter},
+		closers: []*io.PipeWriter{reqWriter, respWriter},
 		Reader:  io.TeeReader(c, respWriter),
 		Writer:  io.MultiWriter(reqWriter, c),
 	}
+	return wrappedConn
 }
 
 func (d *customDialer) CustomDialContext(ctx context.Context, network, address string) (conn net.Conn, err error) {
