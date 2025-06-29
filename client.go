@@ -26,6 +26,7 @@ type HTTPClientSettings struct {
 	DNSRecordsTTL         time.Duration
 	DNSCacheSize          int
 	TLSHandshakeTimeout   time.Duration
+	ConnReadDeadline      time.Duration
 	MaxReadBeforeTruncate int
 	DecompressBody        bool
 	FollowRedirects       bool
@@ -51,6 +52,7 @@ type CustomHTTPClient struct {
 	DiscardHook            DiscardHook
 	dedupeOptions          DedupeOptions
 	TLSHandshakeTimeout    time.Duration
+	ConnReadDeadline       time.Duration
 	MaxReadBeforeTruncate  int
 	verifyCerts            bool
 	FullOnDisk             bool
@@ -204,6 +206,7 @@ func NewWARCWritingHTTPClient(HTTPClientSettings HTTPClientSettings) (httpClient
 	}
 
 	httpClient.TLSHandshakeTimeout = HTTPClientSettings.TLSHandshakeTimeout
+	httpClient.ConnReadDeadline = HTTPClientSettings.ConnReadDeadline
 
 	// Configure custom dialer / transport
 	customDialer, err := newCustomDialer(httpClient, HTTPClientSettings.Proxy, HTTPClientSettings.DialTimeout, HTTPClientSettings.DNSRecordsTTL, HTTPClientSettings.DNSResolutionTimeout, HTTPClientSettings.DNSCacheSize, HTTPClientSettings.DNSServers, HTTPClientSettings.DisableIPv4, HTTPClientSettings.DisableIPv6)

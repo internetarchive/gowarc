@@ -92,13 +92,32 @@ type CustomConnection struct {
 	io.Writer
 	closers []*io.PipeWriter
 	sync.WaitGroup
+	connReadDeadline time.Duration
+	firstRead        sync.Once // Indicates if the first read has been performed, used to set the read deadline
+}
+
+func (cc *CustomConnection) setReadDeadline() error {
+	if cc.connReadDeadline > 0 {
+		if err := cc.Conn.SetReadDeadline(time.Now().Add(cc.connReadDeadline)); err != nil {
+			return errors.New("CustomConnection.Read: SetReadDeadline failed: " + err.Error())
+		}
+	}
+	return nil
 }
 
 func (cc *CustomConnection) Read(b []byte) (int, error) {
+	cc.firstRead.Do(func() { // apply read deadline for the first read
+		if err := cc.setReadDeadline(); err != nil {
+			cc.CloseWithError(err)
+		}
+	})
 	c, err := cc.Reader.Read(b)
 	if err != nil {
 		cc.CloseWithError(err)
+		return c, err
 	}
+	// apply read deadline for the next read
+	cc.setReadDeadline() // ignore error, will be triggered on next read
 	return c, err
 }
 
@@ -111,13 +130,19 @@ func (cc *CustomConnection) Close() error {
 }
 
 func (cc *CustomConnection) CloseWithError(err error) error {
+	var closeErrors []error
+
 	for _, c := range cc.closers {
 		if closeErr := c.CloseWithError(err); closeErr != nil {
-			return fmt.Errorf("CloseWithError: closing pipe writer failed: %w", closeErr)
+			closeErrors = append(closeErrors, fmt.Errorf("closing pipe writer failed: %w", closeErr))
 		}
 	}
 
-	return cc.Conn.Close()
+	if connErr := cc.Conn.Close(); connErr != nil {
+		closeErrors = append(closeErrors, fmt.Errorf("closing connection failed: %w", connErr))
+	}
+
+	return errors.Join(closeErrors...)
 }
 
 func (d *customDialer) wrapConnection(ctx context.Context, c net.Conn, scheme string) *CustomConnection {
@@ -128,10 +153,11 @@ func (d *customDialer) wrapConnection(ctx context.Context, c net.Conn, scheme st
 	go d.writeWARCFromConnection(ctx, reqReader, respReader, scheme, c)
 
 	wrappedConn := &CustomConnection{
-		Conn:    c,
-		closers: []*io.PipeWriter{reqWriter, respWriter},
-		Reader:  io.TeeReader(c, respWriter),
-		Writer:  io.MultiWriter(reqWriter, c),
+		Conn:             c,
+		closers:          []*io.PipeWriter{reqWriter, respWriter},
+		Reader:           io.TeeReader(c, respWriter),
+		Writer:           io.MultiWriter(reqWriter, c),
+		connReadDeadline: d.client.ConnReadDeadline,
 	}
 	if ctx.Value("wrappedConn") != nil {
 		connChan, ok := ctx.Value("wrappedConn").(chan *CustomConnection)
