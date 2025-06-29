@@ -133,6 +133,14 @@ func (d *customDialer) wrapConnection(ctx context.Context, c net.Conn, scheme st
 		Reader:  io.TeeReader(c, respWriter),
 		Writer:  io.MultiWriter(reqWriter, c),
 	}
+	if ctx.Value("wrappedConn") != nil {
+		connChan, ok := ctx.Value("wrappedConn").(chan *CustomConnection)
+		if !ok {
+			panic("wrapConnection: wrappedConn channel is not of type chan *CustomConnection")
+		}
+		connChan <- wrappedConn
+		close(connChan)
+	}
 	return wrappedConn
 }
 
