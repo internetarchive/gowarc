@@ -513,7 +513,7 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 	// Calculate the WARC-Payload-Digest
 	payloadDigest := GetSHA1(resp.Body)
 	if strings.HasPrefix(payloadDigest, "ERROR: ") {
-		// This should happen if the connection was closed halfway through reading the response body
+		// This should _never_ happen.
 		return fmt.Errorf("readResponse: SHA1 ran into an unrecoverable error: %s url: %s", payloadDigest, warcTargetURI)
 	}
 
