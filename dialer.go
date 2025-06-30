@@ -86,46 +86,88 @@ func newCustomDialer(httpClient *CustomHTTPClient, proxyURL string, DialTimeout,
 	return d, nil
 }
 
-type customConnection struct {
+type CustomConnection struct {
 	net.Conn
 	io.Reader
 	io.Writer
-	closers []io.Closer
+	closers []*io.PipeWriter
 	sync.WaitGroup
+	connReadDeadline time.Duration
+	firstRead        sync.Once // Indicates if the first read has been performed, used to set the read deadline
 }
 
-func (cc *customConnection) Read(b []byte) (int, error) {
-	return cc.Reader.Read(b)
+func (cc *CustomConnection) setReadDeadline() error {
+	if cc.connReadDeadline > 0 {
+		if err := cc.Conn.SetReadDeadline(time.Now().Add(cc.connReadDeadline)); err != nil {
+			return errors.New("CustomConnection.Read: SetReadDeadline failed: " + err.Error())
+		}
+	}
+	return nil
 }
 
-func (cc *customConnection) Write(b []byte) (int, error) {
+func (cc *CustomConnection) Read(b []byte) (int, error) {
+	cc.firstRead.Do(func() { // apply read deadline for the first read
+		if err := cc.setReadDeadline(); err != nil {
+			cc.CloseWithError(err)
+		}
+	})
+	c, err := cc.Reader.Read(b)
+	if err != nil {
+		cc.CloseWithError(err)
+		return c, err
+	}
+	// apply read deadline for the next read
+	cc.setReadDeadline() // ignore error, will be triggered on next read
+	return c, err
+}
+
+func (cc *CustomConnection) Write(b []byte) (int, error) {
 	return cc.Writer.Write(b)
 }
 
-func (cc *customConnection) Close() error {
+func (cc *CustomConnection) Close() error {
+	return cc.CloseWithError(nil)
+}
+
+func (cc *CustomConnection) CloseWithError(err error) error {
+	var closeErrors []error
+
 	for _, c := range cc.closers {
-		err := c.Close()
-		if err != nil {
-			return err
+		if closeErr := c.CloseWithError(err); closeErr != nil {
+			closeErrors = append(closeErrors, fmt.Errorf("closing pipe writer failed: %w", closeErr))
 		}
 	}
 
-	return cc.Conn.Close()
+	if connErr := cc.Conn.Close(); connErr != nil {
+		closeErrors = append(closeErrors, fmt.Errorf("closing connection failed: %w", connErr))
+	}
+
+	return errors.Join(closeErrors...)
 }
 
-func (d *customDialer) wrapConnection(ctx context.Context, c net.Conn, scheme string) net.Conn {
+func (d *customDialer) wrapConnection(ctx context.Context, c net.Conn, scheme string) *CustomConnection {
 	reqReader, reqWriter := io.Pipe()
 	respReader, respWriter := io.Pipe()
 
 	d.client.WaitGroup.Add(1)
 	go d.writeWARCFromConnection(ctx, reqReader, respReader, scheme, c)
 
-	return &customConnection{
-		Conn:    c,
-		closers: []io.Closer{reqWriter, respWriter},
-		Reader:  io.TeeReader(c, respWriter),
-		Writer:  io.MultiWriter(reqWriter, c),
+	wrappedConn := &CustomConnection{
+		Conn:             c,
+		closers:          []*io.PipeWriter{reqWriter, respWriter},
+		Reader:           io.TeeReader(c, respWriter),
+		Writer:           io.MultiWriter(reqWriter, c),
+		connReadDeadline: d.client.ConnReadDeadline,
 	}
+	if ctx.Value("wrappedConn") != nil {
+		connChan, ok := ctx.Value("wrappedConn").(chan *CustomConnection)
+		if !ok {
+			panic("wrapConnection: wrappedConn channel is not of type chan *CustomConnection")
+		}
+		connChan <- wrappedConn
+		close(connChan)
+	}
+	return wrappedConn
 }
 
 func (d *customDialer) CustomDialContext(ctx context.Context, network, address string) (conn net.Conn, err error) {
@@ -425,17 +467,15 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 
 	// Initialize the response record
 	var responseRecord = NewRecord(d.client.TempDir, d.client.FullOnDisk)
+
+	recordChan <- responseRecord
+
 	responseRecord.Header.Set("WARC-Type", "response")
 	responseRecord.Header.Set("Content-Type", "application/http; msgtype=response")
 
 	// Read the response from the pipe
 	bytesCopied, err := io.Copy(responseRecord.Content, respPipe)
 	if err != nil {
-		closeErr := responseRecord.Content.Close()
-		if closeErr != nil {
-			return fmt.Errorf("readResponse: io.Copy failed and closing content failed: %s", closeErr.Error())
-		}
-
 		return fmt.Errorf("readResponse: io.Copy failed: %s", err.Error())
 	}
 
@@ -447,11 +487,6 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 
 	resp, err := http.ReadResponse(bufio.NewReader(responseRecord.Content), nil)
 	if err != nil {
-		closeErr := responseRecord.Content.Close()
-		if closeErr != nil {
-			return fmt.Errorf("readResponse: http.ReadResponse failed and closing content failed: %s", closeErr.Error())
-		}
-
 		return err
 	}
 
@@ -471,10 +506,6 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 		if err != nil {
 			return &DiscardHookError{URL: warcTargetURI, Reason: reason, Err: fmt.Errorf("closing body failed: %w", err)}
 		}
-		err = responseRecord.Content.Close()
-		if err != nil {
-			return &DiscardHookError{URL: warcTargetURI, Reason: reason, Err: fmt.Errorf("closing content failed: %w", err)}
-		}
 
 		return &DiscardHookError{URL: warcTargetURI, Reason: reason, Err: nil}
 	}
@@ -482,11 +513,6 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 	// Calculate the WARC-Payload-Digest
 	payloadDigest := GetSHA1(resp.Body)
 	if strings.HasPrefix(payloadDigest, "ERROR: ") {
-		closeErr := responseRecord.Content.Close()
-		if closeErr != nil {
-			return fmt.Errorf("readResponse: SHA1 calculation failed and closing content failed: %s", closeErr.Error())
-		}
-
 		// This should _never_ happen.
 		return fmt.Errorf("readResponse: SHA1 ran into an unrecoverable error: %s url: %s", payloadDigest, warcTargetURI)
 	}
@@ -636,8 +662,6 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 		responseRecord.Content = tempBuffer
 	}
 
-	recordChan <- responseRecord
-
 	return nil
 }
 
@@ -716,6 +740,9 @@ func (d *customDialer) readRequest(ctx context.Context, scheme string, reqPipe *
 
 	// Initialize the request record
 	requestRecord := NewRecord(d.client.TempDir, d.client.FullOnDisk)
+
+	recordChan <- requestRecord
+
 	requestRecord.Header.Set("WARC-Type", "request")
 	requestRecord.Header.Set("Content-Type", "application/http; msgtype=request")
 
@@ -736,13 +763,6 @@ func (d *customDialer) readRequest(ctx context.Context, scheme string, reqPipe *
 	case <-ctx.Done():
 		return ctx.Err()
 	case targetURITxCh <- warcTargetURI:
-	}
-
-	// Send the request record to the channel for further processing
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case recordChan <- requestRecord:
 	}
 
 	return nil

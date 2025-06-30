@@ -205,6 +205,71 @@ func TestHTTPClientRequestFailing(t *testing.T) {
 	httpClient.Close()
 }
 
+func TestHTTPClientConnReadDeadline(t *testing.T) {
+	var (
+		rotatorSettings = defaultRotatorSettings(t)
+		errWg           sync.WaitGroup
+		err             error
+	)
+
+	// 1) Set up a test server that sends its response slowly, in chunks
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusOK)
+
+		// Write chunks of data with delays in between, simulating a slow response
+		for i := range 10 {
+			_, writeErr := w.Write([]byte("CHUNK-DATA"))
+			if writeErr != nil {
+				return
+			}
+			w.(http.Flusher).Flush() // force chunk to send
+			d := time.Duration(i) * 100 * time.Millisecond
+			t.Logf("Sleeping for %v before sending next chunk", d)
+			time.Sleep(d)
+		}
+	}))
+	defer server.Close()
+
+	httpClient, err := NewWARCWritingHTTPClient(HTTPClientSettings{
+		RotatorSettings:  rotatorSettings,
+		ConnReadDeadline: 350 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("Unable to init WARC writing HTTP client: %s", err)
+	}
+
+	// Read any WARC-writing errors
+	errWg.Add(1)
+	go func() {
+		defer errWg.Done()
+		for range httpClient.ErrChan {
+		}
+	}()
+
+	// 3) Create a request
+	req, err := http.NewRequest("GET", server.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 4) Perform the request
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		t.Fatalf("unexpected error on Do: %v", err)
+	}
+
+	copied, err := io.Copy(io.Discard, resp.Body)
+	if err == nil {
+		t.Fatal("expected error on Copy, got none")
+	} else if !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("expected i/o timeout error, got: %v", err)
+	}
+	t.Logf("Copied %d bytes before deadline", copied)
+
+	httpClient.Close()
+}
+
 func TestHTTPClientContextCancellation(t *testing.T) {
 	var (
 		rotatorSettings = defaultRotatorSettings(t)
@@ -218,7 +283,7 @@ func TestHTTPClientContextCancellation(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 
 		// Write chunks of data with delays in between, simulating a slow response
-		for i := 0; i < 10; i++ {
+		for range 10 {
 			_, writeErr := w.Write([]byte("CHUNK-DATA-"))
 			if writeErr != nil {
 				return
