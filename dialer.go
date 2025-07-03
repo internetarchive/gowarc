@@ -341,7 +341,7 @@ func (d *customDialer) writeWARCFromConnection(ctx context.Context, reqPipe, res
 	})
 
 	errs.Go(func() error {
-		return d.readResponse(ctx, respPipe, targetURIReqCh, targetURIRespCh, recordChan)
+		return d.readResponse(ctx, respPipe, targetURIReqCh, targetURIRespCh, recordChan, batch.CaptureTime)
 	})
 
 	// Wait for both goroutines to finish
@@ -462,7 +462,7 @@ func (d *customDialer) writeWARCFromConnection(ctx context.Context, reqPipe, res
 	}
 }
 
-func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader, targetURIRxCh chan string, targetURITxCh chan string, recordChan chan *Record) error {
+func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader, targetURIRxCh chan string, targetURITxCh chan string, recordChan chan *Record, captureTime string) error {
 	defer close(targetURITxCh)
 
 	// Initialize the response record
@@ -517,11 +517,6 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 		return fmt.Errorf("readResponse: SHA1 ran into an unrecoverable error: %s url: %s", payloadDigest, warcTargetURI)
 	}
 
-	err = resp.Body.Close()
-	if err != nil {
-		return fmt.Errorf("readResponse: closing body after SHA1 calculation failed: %s", err.Error())
-	}
-
 	responseRecord.Header.Set("WARC-Payload-Digest", "sha1:"+payloadDigest)
 
 	// Write revisit record if local, CDX, or Doppelganger dedupe is activated and finds match.
@@ -537,7 +532,12 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 
 		// If local dedupe does not find anything, we will check Doppelganger (if set) then CDX (if set).
 		if d.client.dedupeOptions.DoppelgangerDedupe && revisit.targetURI == "" {
-			revisit, _ = checkDoppelgangerRevisit(d.client.dedupeOptions.DoppelgangerHost, payloadDigest, warcTargetURI)
+			SHA256Base16 := GetSHA256Base16(resp.Body)
+			if strings.HasPrefix(SHA256Base16, "ERROR: ") {
+				// This should _never_ happen.
+				return fmt.Errorf("readResponse: SHA256 ran into an unrecoverable error (Doppelganger): %s url: %s", payloadDigest, warcTargetURI)
+			}
+			revisit, _ = checkDoppelgangerRevisit(d.client.dedupeOptions.DoppelgangerHost, SHA256Base16, warcTargetURI, bytesCopied, captureTime, payloadDigest)
 			if revisit.targetURI != "" {
 				DoppelgangerDedupeTotalBytes.Add(bytesCopied)
 				DoppelgangerDedupeTotal.Add(1)
@@ -551,6 +551,12 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 				CDXDedupeTotal.Add(1)
 			}
 		}
+	}
+
+	// Move body close here to allow second hash to be calculated on body for more secure revisit calculation.
+	err = resp.Body.Close()
+	if err != nil {
+		return fmt.Errorf("readResponse: closing body after SHA1 calculation and revisit checks failed: %s", err.Error())
 	}
 
 	if revisit.targetURI != "" && payloadDigest != emptyPayloadDigest {

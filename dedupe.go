@@ -84,13 +84,35 @@ func checkCDXRevisit(CDXURL string, digest string, targetURI string, cookie stri
 	return revisitRecord{}, nil
 }
 
-func checkDoppelgangerRevisit(DoppelgangerHost string, digest string, targetURI string) (revisitRecord, error) {
-	req, err := http.NewRequest("GET", DoppelgangerHost+"/api/records/"+digest+"?uri="+targetURI, nil)
+func checkDoppelgangerRevisit(DoppelgangerHost string, SHA256Base16 string, targetURI string, recordSize int64, date string, SHA1 string) (revisitRecord, error) {
+	var requestData struct {
+		URI  string `json:"uri"`
+		SHA1 string `json:"sha1"`
+		Size int64  `json:"size"`
+		Date int64  `json:"date"`
+	}
+
+	requestData.URI = targetURI
+	requestData.SHA1 = SHA1
+	requestData.Size = recordSize
+	dateInt, err := strconv.ParseInt(date, 10, 64)
+	if err != nil {
+		return revisitRecord{}, err
+	}
+	requestData.Date = dateInt
+
+	jsonData, err := json.Marshal(requestData)
 	if err != nil {
 		return revisitRecord{}, err
 	}
 
-	// I don't think there's a need to create a new HTTP client, but it does look a little funky.
+	req, err := http.NewRequest("POST", DoppelgangerHost+"/api/records/"+SHA256Base16, strings.NewReader(string(jsonData)))
+	if err != nil {
+		return revisitRecord{}, err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+
 	resp, err := DedupeHTTPClient.Do(req)
 	if err != nil {
 		return revisitRecord{}, err
@@ -104,10 +126,13 @@ func checkDoppelgangerRevisit(DoppelgangerHost string, digest string, targetURI 
 
 	if resp.StatusCode == 200 {
 		var DoppelgangerJSONResponse struct {
-			ID   string `json:"id"`
-			URI  string `json:"uri"`
-			Date int64  `json:"date"`
+			ID   string `json:"id" db:"id"`
+			URI  string `json:"uri" db:"uri"`
+			Date int64  `json:"date" db:"date"`
+			SHA1 string `json:"sha1" db:"sha1"`
+			Size int64  `json:"size" db:"size"`
 		}
+
 		// Parse JSON response
 		if err := json.Unmarshal(body, &DoppelgangerJSONResponse); err != nil {
 			return revisitRecord{}, err
