@@ -73,11 +73,16 @@ func checkCDXRevisit(CDXURL string, digest string, targetURI string, cookie stri
 	if len(cdxReply) >= 7 && cdxReply[3] != "warc/revisit" && cdxReply[5] == digest {
 		recordSize, _ := strconv.Atoi(cdxReply[6])
 
+		t, err := time.Parse("20060102150405", cdxReply[1])
+		if err != nil {
+			return revisitRecord{}, err
+		}
+
 		return revisitRecord{
 			responseUUID: "",
 			size:         recordSize,
 			targetURI:    cdxReply[2],
-			date:         cdxReply[1],
+			date:         t.Format(time.RFC3339Nano),
 		}, nil
 	}
 
@@ -113,11 +118,16 @@ func checkDoppelgangerRevisit(DoppelgangerHost string, digest string, targetURI 
 			return revisitRecord{}, err
 		}
 
+		t, err := time.Parse("20060102150405", strconv.FormatInt(DoppelgangerJSONResponse.Date, 10))
+		if err != nil {
+			return revisitRecord{}, err
+		}
+
 		return revisitRecord{
 			responseUUID: "",
 			size:         0,
 			targetURI:    DoppelgangerJSONResponse.URI,
-			date:         strconv.FormatInt(DoppelgangerJSONResponse.Date, 10),
+			date:         t.Format(time.RFC3339Nano),
 		}, nil
 	}
 
