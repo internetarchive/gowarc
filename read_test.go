@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func testFileHash(t *testing.T, path string) {
@@ -262,6 +263,14 @@ func testFileRevisitVailidity(t *testing.T, path string, originalTime string, or
 		if record.Header.Get("WARC-Type") == "revisit" {
 			revisitRecordsFound = true
 			if record.Header.Get("WARC-Payload-Digest") == originalDigest && record.Header.Get("WARC-Refers-To-Date") == originalTime {
+				// Check that WARC-Refers-To-Date is a valid ISO8601 timestamp
+				refersToDate := record.Header.Get("WARC-Refers-To-Date")
+				if refersToDate != "" {
+					_, err := time.Parse(time.RFC3339, refersToDate)
+					if err != nil {
+						t.Fatalf("WARC-Refers-To-Date is not a valid ISO8601 timestamp: %s", refersToDate)
+					}
+				}
 				err = record.Content.Close()
 				if err != nil {
 					t.Fatalf("failed to close record content: %v", err)
