@@ -443,11 +443,19 @@ func (d *customDialer) writeWARCFromConnection(ctx context.Context, reqPipe, res
 
 			if d.client.dedupeOptions.LocalDedupe {
 				if r.Header.Get("WARC-Type") == "response" && r.Header.Get("WARC-Payload-Digest")[5:] != emptyPayloadDigest {
+					captureTime, timeConversionErr := time.Parse(time.RFC3339, batch.CaptureTime)
+					if timeConversionErr != nil {
+						d.client.ErrChan <- &Error{
+							Err:  timeConversionErr,
+							Func: "writeWARCFromConnection.timeConversionErr",
+						}
+						return
+					}
 					d.client.dedupeHashTable.Store(r.Header.Get("WARC-Payload-Digest")[5:], revisitRecord{
 						responseUUID: recordIDs[i],
 						size:         getContentLength(r.Content),
 						targetURI:    warcTargetURI,
-						date:         batch.CaptureTime,
+						date:         captureTime,
 					})
 				}
 			}
@@ -556,7 +564,7 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 	if revisit.targetURI != "" && payloadDigest != emptyPayloadDigest {
 		responseRecord.Header.Set("WARC-Type", "revisit")
 		responseRecord.Header.Set("WARC-Refers-To-Target-URI", revisit.targetURI)
-		responseRecord.Header.Set("WARC-Refers-To-Date", revisit.date)
+		responseRecord.Header.Set("WARC-Refers-To-Date", revisit.date.Format(time.RFC3339Nano))
 
 		if revisit.responseUUID != "" {
 			responseRecord.Header.Set("WARC-Refers-To", "<urn:uuid:"+revisit.responseUUID+">")

@@ -35,7 +35,7 @@ type DedupeOptions struct {
 type revisitRecord struct {
 	responseUUID string
 	targetURI    string
-	date         string
+	date         time.Time
 	size         int
 }
 
@@ -82,7 +82,7 @@ func checkCDXRevisit(CDXURL string, digest string, targetURI string, cookie stri
 			responseUUID: "",
 			size:         recordSize,
 			targetURI:    cdxReply[2],
-			date:         t.Format(time.RFC3339Nano),
+			date:         t,
 		}, nil
 	}
 
@@ -127,7 +127,7 @@ func checkDoppelgangerRevisit(DoppelgangerHost string, digest string, targetURI 
 			responseUUID: "",
 			size:         0,
 			targetURI:    DoppelgangerJSONResponse.URI,
-			date:         t.Format(time.RFC3339Nano),
+			date:         t,
 		}, nil
 	}
 
