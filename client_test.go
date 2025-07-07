@@ -924,7 +924,7 @@ func TestHTTPClientRemoteDedupe(t *testing.T) {
 
 	for _, path := range files {
 		testFileSingleHashCheck(t, path, "sha1:UIRWL5DFIPQ4MX3D3GFHM2HCVU3TZ6I3", []string{"26872", "132"}, 4, server.URL+"/")
-		testFileRevisitVailidity(t, path, "20220320002518", "sha1:UIRWL5DFIPQ4MX3D3GFHM2HCVU3TZ6I3", false)
+		testFileRevisitVailidity(t, path, "2022-03-20T00:25:18Z", "sha1:UIRWL5DFIPQ4MX3D3GFHM2HCVU3TZ6I3", false)
 	}
 
 	// verify that the remote dedupe count is correct
@@ -1023,7 +1023,7 @@ func TestHTTPClientDoppelgangerDedupe(t *testing.T) {
 
 	for _, path := range files {
 		testFileSingleHashCheck(t, path, "sha1:UIRWL5DFIPQ4MX3D3GFHM2HCVU3TZ6I3", []string{"26872", "132"}, 4, server.URL+"/")
-		testFileRevisitVailidity(t, path, "20220320002518", "sha1:UIRWL5DFIPQ4MX3D3GFHM2HCVU3TZ6I3", false)
+		testFileRevisitVailidity(t, path, "2022-03-20T00:25:18Z", "sha1:UIRWL5DFIPQ4MX3D3GFHM2HCVU3TZ6I3", false)
 	}
 
 	// verify that the remote dedupe count is correct
