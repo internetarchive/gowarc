@@ -59,9 +59,10 @@ type CustomHTTPClient struct {
 	closeDNSCache          func()
 	// MaxRAMUsageFraction is the fraction of system RAM above which we'll force spooling to disk. For example, 0.5 = 50%.
 	// If set to <= 0, the default value is DefaultMaxRAMUsageFraction.
-	MaxRAMUsageFraction float64
-	randomLocalIP       bool
-	DataTotal           *atomic.Int64
+	MaxRAMUsageFraction    float64
+	randomLocalIP          bool
+	DataTotal              *atomic.Int64
+	DataTotalContentLength *atomic.Int64
 
 	CDXDedupeTotalBytes          *atomic.Int64
 	DoppelgangerDedupeTotalBytes *atomic.Int64
@@ -105,6 +106,7 @@ func NewWARCWritingHTTPClient(HTTPClientSettings HTTPClientSettings) (httpClient
 
 	// Initialize counters
 	httpClient.DataTotal = &DataTotal
+	httpClient.DataTotalContentLength = &DataTotalContentLength
 
 	httpClient.CDXDedupeTotalBytes = &CDXDedupeTotalBytes
 	httpClient.DoppelgangerDedupeTotalBytes = &DoppelgangerDedupeTotalBytes
