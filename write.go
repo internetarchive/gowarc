@@ -77,13 +77,7 @@ func (w *Writer) WriteRecord(r *Record) (recordID string, err error) {
 
 	// Write headers
 	if r.Header.Get("Content-Length") == "" {
-		contentLength := getContentLength(r.Content)
-		r.Header.Set("Content-Length", strconv.Itoa(contentLength))
-
-		// Set DataTotalContentLength to check against compressed byte counts
-		if contentLength > 0 {
-			DataTotalContentLength.Add(int64(contentLength))
-		}
+		r.Header.Set("Content-Length", strconv.Itoa(getContentLength(r.Content)))
 	}
 
 	if r.Header.Get("WARC-Block-Digest") == "" {
@@ -107,6 +101,11 @@ func (w *Writer) WriteRecord(r *Record) (recordID string, err error) {
 	}
 
 	if written > 0 {
+		if r.Header.Get("Content-Length") != "" {
+			if contentLength, err := strconv.ParseInt(r.Header.Get("Content-Length"), 10, 64); err == nil {
+				DataTotalContentLength.Add(contentLength)
+			}
+		}
 		DataTotal.Add(written)
 	}
 

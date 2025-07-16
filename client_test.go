@@ -120,6 +120,7 @@ func TestHTTPClient(t *testing.T) {
 
 	// Reset counter to 0
 	DataTotal.Store(0)
+	DataTotalContentLength.Store(0)
 
 	// init test HTTP endpoint
 	server := newTestImageServer(t, http.StatusOK)
@@ -161,6 +162,11 @@ func TestHTTPClient(t *testing.T) {
 	dataTotal := httpClient.DataTotal.Load()
 	if dataTotal < 27130 || dataTotal > 27160 {
 		t.Fatalf("total bytes downloaded mismatch, expected: 27130-27160 got: %d", dataTotal)
+	}
+
+	dataTotalContentLength := httpClient.DataTotalContentLength.Load()
+	if dataTotalContentLength < 27130 || dataTotalContentLength > 27160 {
+		t.Fatalf("total bytes downloaded mismatch, expected: 27130-27160 got: %d", dataTotalContentLength)
 	}
 }
 
