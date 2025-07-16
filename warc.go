@@ -37,8 +37,7 @@ var (
 	fileMutex sync.Mutex
 
 	// Create a couple of counters for tracking various stats
-	DataTotal              atomic.Int64
-	DataTotalContentLength atomic.Int64
+	DataTotal atomic.Int64
 
 	CDXDedupeTotalBytes          atomic.Int64
 	DoppelgangerDedupeTotalBytes atomic.Int64
