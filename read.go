@@ -147,9 +147,11 @@ func (r *Reader) ReadRecord(opts ...ReadOpts) (*Record, bool, error) {
 	return r.record, false, nil // ok
 }
 
+// ReadOpts are options for ReadRecord
 type ReadOpts int
 
 const (
-	ReadOptsNone ReadOpts = iota
-	ReadOptsNoContentOutput
+	// ReadOptsNoContentOutput means that the content of the record should not be returned.
+	// This is useful for reading only the headers or metadata of the record.
+	ReadOptsNoContentOutput ReadOpts = iota
 )
