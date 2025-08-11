@@ -65,7 +65,7 @@ func readUntilDelim(r reader, delim []byte) (line []byte, n int64, err error) {
 // ReadRecord reads the next record from the opened WARC file.
 // Returns:
 //   - *Record: nil when at clean EOF (no more records).
-//   - int64: total bytes consumed to read this record (version + headers + content + trailing CRLF CRLF).
+//   - int64: total bytes of the decompressed record (version + headers + content + trailing CRLF CRLF).
 //   - error: any parsing/IO error encountered (nil for clean EOF).
 func (r *Reader) ReadRecord(opts ...ReadOpts) (*Record, int64, error) {
 	var (
