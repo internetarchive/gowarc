@@ -74,7 +74,6 @@ func (r *Reader) ReadRecord(opts ...ReadOpts) (*Record, bool, error) {
 	for _, opt := range opts {
 		switch opt {
 		case ReadOptsNoContentOutput:
-			fmt.Println("ReadOptsNoContentOutput enabled, discarding content")
 			discardContent = true
 		}
 	}
