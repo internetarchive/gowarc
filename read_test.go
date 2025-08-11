@@ -410,11 +410,11 @@ func TestReaderSize(t *testing.T) {
 
 		var totalSize int64
 		for {
-			rec, size, err := reader.ReadRecord()
+			_, size, err := reader.ReadRecord()
 			if err != nil {
 				t.Fatalf("failed while reading record content: %v", err)
 			}
-			if rec == nil { // clean EOF
+			if size == 0 { // clean EOF
 				break
 			}
 			totalSize += size
