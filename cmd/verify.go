@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/internetarchive/gowarc"
+	warc "github.com/internetarchive/gowarc"
 	"github.com/spf13/cobra"
 )
 
@@ -92,8 +92,8 @@ func verify(cmd *cobra.Command, files []string) {
 			defer recordReaderWg.Done()
 			defer close(recordChan)
 			for {
-				record, eof, err := reader.ReadRecord()
-				if eof {
+				record, size, err := reader.ReadRecord()
+				if size == 0 {
 					allRecordsRead = true
 					break
 				}
