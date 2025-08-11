@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/klauspost/compress/gzip"
 )
 
 func testFileHash(t *testing.T, path string) {
@@ -369,6 +371,57 @@ func TestReaderNoContentOpt(t *testing.T) {
 			if record.Content.Len() > 0 {
 				t.Fatal("expected no content, got content")
 			}
+		}
+	}
+}
+
+func TestReaderSize(t *testing.T) {
+	paths := []string{
+		"testdata/test.warc.gz",
+	}
+
+	for _, path := range paths {
+		expFile, err := os.Open(path)
+		if err != nil {
+			t.Fatalf("failed to open %q for expected size: %v", path, err)
+		}
+		gr, err := gzip.NewReader(expFile)
+		if err != nil {
+			expFile.Close()
+			t.Fatalf("failed to create gzip reader for %q: %v", path, err)
+		}
+		expectedSize, err := io.Copy(io.Discard, gr)
+		gr.Close()
+		expFile.Close()
+		if err != nil {
+			t.Fatalf("failed to read decompressed content for %q: %v", path, err)
+		}
+
+		file, err := os.Open(path)
+		if err != nil {
+			t.Fatalf("failed to open %q: %v", path, err)
+		}
+		defer file.Close()
+
+		reader, err := NewReader(file)
+		if err != nil {
+			t.Fatalf("warc.NewReader failed for %q: %v", path, err)
+		}
+
+		var totalSize int64
+		for {
+			rec, size, err := reader.ReadRecord()
+			if err != nil {
+				t.Fatalf("failed while reading record content: %v", err)
+			}
+			if rec == nil { // clean EOF
+				break
+			}
+			totalSize += size
+		}
+
+		if totalSize != expectedSize {
+			t.Fatalf("expected total size to be %d, got %d", expectedSize, totalSize)
 		}
 	}
 }
