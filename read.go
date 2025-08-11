@@ -70,7 +70,6 @@ func readUntilDelim(r reader, delim []byte) (line []byte, n int64, err error) {
 func (r *Reader) ReadRecord(opts ...ReadOpts) (*Record, int64, error) {
 	var (
 		err            error
-		tempReader     = bufio.NewReader(r.bufReader)
 		discardContent bool
 		bytesRead      int64
 	)
@@ -83,7 +82,7 @@ func (r *Reader) ReadRecord(opts ...ReadOpts) (*Record, int64, error) {
 	}
 
 	// first line: WARC version
-	warcVer, n, err := readUntilDelim(tempReader, []byte("\r\n"))
+	warcVer, n, err := readUntilDelim(r.bufReader, []byte("\r\n"))
 	bytesRead += n
 	if err != nil {
 		if err == io.EOF && len(warcVer) == 0 {
@@ -96,7 +95,7 @@ func (r *Reader) ReadRecord(opts ...ReadOpts) (*Record, int64, error) {
 	// Parse the record headers
 	header := NewHeader()
 	for {
-		line, n, err := readUntilDelim(tempReader, []byte("\r\n"))
+		line, n, err := readUntilDelim(r.bufReader, []byte("\r\n"))
 		bytesRead += n
 		if err != nil {
 			return nil, bytesRead, fmt.Errorf("reading header: %w", err)
@@ -119,9 +118,9 @@ func (r *Reader) ReadRecord(opts ...ReadOpts) (*Record, int64, error) {
 	buf := spooledtempfile.NewSpooledTempFile("warc", "", r.threshold, false, -1)
 	var copied int64
 	if discardContent {
-		copied, err = io.CopyN(io.Discard, tempReader, length)
+		copied, err = io.CopyN(io.Discard, r.bufReader, length)
 	} else {
-		copied, err = io.CopyN(buf, tempReader, length)
+		copied, err = io.CopyN(buf, r.bufReader, length)
 	}
 	bytesRead += copied
 	if err != nil {
