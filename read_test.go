@@ -27,8 +27,8 @@ func testFileHash(t *testing.T, path string) {
 	}
 
 	for {
-		record, eol, err := reader.ReadRecord()
-		if eol {
+		record, size, err := reader.ReadRecord()
+		if size == 0 {
 			break
 		}
 		if err != nil {
@@ -65,8 +65,8 @@ func testFileScan(t *testing.T, path string) {
 
 	total := 0
 	for {
-		_, eol, err := reader.ReadRecord()
-		if eol {
+		_, size, err := reader.ReadRecord()
+		if size == 0 {
 			break
 		}
 		if err != nil {
@@ -101,8 +101,8 @@ func testFileSingleHashCheck(t *testing.T, path string, hash string, expectedCon
 	totalRead := 0
 
 	for {
-		record, eol, err := reader.ReadRecord()
-		if eol {
+		record, size, err := reader.ReadRecord()
+		if size == 0 {
 			if expectedTotal == -1 {
 				// This is expected for multiple file WARCs as we need to count the total count outside of this function.
 				return totalRead
@@ -218,8 +218,8 @@ func testFileRevisitVailidity(t *testing.T, path string, originalTime string, or
 	}
 
 	for {
-		record, eol, err := reader.ReadRecord()
-		if eol {
+		record, size, err := reader.ReadRecord()
+		if size == 0 {
 			if revisitRecordsFound {
 				return
 			}
@@ -314,8 +314,8 @@ func testFileEarlyEOF(t *testing.T, path string) {
 	}
 	// read the records
 	for {
-		_, eol, err := reader.ReadRecord()
-		if eol {
+		_, size, err := reader.ReadRecord()
+		if size == 0 {
 			break
 		}
 		if err != nil {
@@ -357,8 +357,8 @@ func TestReaderNoContentOpt(t *testing.T) {
 		}
 
 		for {
-			record, eol, err := reader.ReadRecord(ReadOptsNoContentOutput)
-			if eol {
+			record, size, err := reader.ReadRecord(ReadOptsNoContentOutput)
+			if size == 0 {
 				break
 			}
 			if err != nil {
@@ -392,8 +392,8 @@ func BenchmarkBasicRead(b *testing.B) {
 		}
 
 		for {
-			record, eol, err := reader.ReadRecord()
-			if eol {
+			record, size, err := reader.ReadRecord()
+			if size == 0 {
 				break
 			}
 			if err != nil {
