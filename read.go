@@ -11,7 +11,7 @@ import (
 	"github.com/internetarchive/gowarc/pkg/spooledtempfile"
 )
 
-// Reader store the bufio.Reader and gzip.Reader for a WARC file
+// Reader stores the bufio.Reader and gzip.Reader for a WARC file
 type Reader struct {
 	bufReader *bufio.Reader
 	record    *Record
@@ -37,38 +37,42 @@ func NewReader(reader io.ReadCloser) (*Reader, error) {
 			return nil, err
 		}
 	}
-
 	return &Reader{
 		bufReader: bufioReader,
 		threshold: threshold,
 	}, nil
 }
 
-func readUntilDelim(r reader, delim []byte) (line []byte, err error) {
+// readUntilDelim reads until delim (inclusive) and returns the line (without delim)
+// and the number of bytes consumed (including the delim).
+func readUntilDelim(r reader, delim []byte) (line []byte, n int64, err error) {
 	for {
-		var s []byte
-		s, err = r.ReadBytes(delim[len(delim)-1])
-		line = append(line, s...)
+		var chunk []byte
+		chunk, err = r.ReadBytes(delim[len(delim)-1])
+		n += int64(len(chunk))
+		line = append(line, chunk...)
 		if err != nil {
-			return line, err
+			// return what we have (may be partial) along with the error
+			return line, n, err
 		}
-
 		if bytes.HasSuffix(line, delim) {
-			return line[:len(line)-len(delim)], nil
+			// drop the delimiter from the returned line
+			return line[:len(line)-len(delim)], n, nil
 		}
 	}
 }
 
-// ReadRecord reads the next record from the opened WARC file
-// returns:
-//   - Record: if an error occurred, record **may be** nil. if eol is true, record **must be** nil.
-//   - bool (eol): if true, we readed all records successfully.
-//   - error: error
-func (r *Reader) ReadRecord(opts ...ReadOpts) (*Record, bool, error) {
+// ReadRecord reads the next record from the opened WARC file.
+// Returns:
+//   - *Record: nil when at clean EOF (no more records).
+//   - int64: total bytes consumed to read this record (version + headers + content + trailing CRLF CRLF).
+//   - error: any parsing/IO error encountered (nil for clean EOF).
+func (r *Reader) ReadRecord(opts ...ReadOpts) (*Record, int64, error) {
 	var (
 		err            error
-		tempReader     *bufio.Reader
+		tempReader     = bufio.NewReader(r.bufReader)
 		discardContent bool
+		bytesRead      int64
 	)
 
 	for _, opt := range opts {
@@ -78,24 +82,24 @@ func (r *Reader) ReadRecord(opts ...ReadOpts) (*Record, bool, error) {
 		}
 	}
 
-	tempReader = bufio.NewReader(r.bufReader)
-
 	// first line: WARC version
-	var warcVer []byte
-	warcVer, err = readUntilDelim(tempReader, []byte("\r\n"))
+	warcVer, n, err := readUntilDelim(tempReader, []byte("\r\n"))
+	bytesRead += n
 	if err != nil {
-		if err == io.EOF {
-			return nil, true, nil // EOF, no error
+		if err == io.EOF && len(warcVer) == 0 {
+			// clean EOF: no more records
+			return nil, 0, nil
 		}
-		return nil, false, fmt.Errorf("reading WARC version: %w", err)
+		return nil, bytesRead, fmt.Errorf("reading WARC version: %w", err)
 	}
 
 	// Parse the record headers
 	header := NewHeader()
 	for {
-		line, err := readUntilDelim(tempReader, []byte("\r\n"))
+		line, n, err := readUntilDelim(tempReader, []byte("\r\n"))
+		bytesRead += n
 		if err != nil {
-			return nil, false, fmt.Errorf("reading header: %w", err)
+			return nil, bytesRead, fmt.Errorf("reading header: %w", err)
 		}
 		if len(line) == 0 {
 			break
@@ -108,18 +112,20 @@ func (r *Reader) ReadRecord(opts ...ReadOpts) (*Record, bool, error) {
 	// Get the Content-Length
 	length, err := strconv.ParseInt(header.Get("Content-Length"), 10, 64)
 	if err != nil {
-		return nil, false, fmt.Errorf("parsing Content-Length: %w", err)
+		return nil, bytesRead, fmt.Errorf("parsing Content-Length: %w", err)
 	}
 
 	// reading doesn't really need to be in TempDir, nor can we access it as it's on the client.
 	buf := spooledtempfile.NewSpooledTempFile("warc", "", r.threshold, false, -1)
+	var copied int64
 	if discardContent {
-		_, err = io.CopyN(io.Discard, tempReader, length)
+		copied, err = io.CopyN(io.Discard, tempReader, length)
 	} else {
-		_, err = io.CopyN(buf, tempReader, length)
+		copied, err = io.CopyN(buf, tempReader, length)
 	}
+	bytesRead += copied
 	if err != nil {
-		return nil, false, fmt.Errorf("copying record content: %w", err)
+		return nil, bytesRead, fmt.Errorf("copying record content: %w", err)
 	}
 
 	r.record = &Record{
@@ -128,23 +134,24 @@ func (r *Reader) ReadRecord(opts ...ReadOpts) (*Record, bool, error) {
 		Version: string(warcVer),
 	}
 
-	// Skip two empty lines
+	// Skip two empty lines (record boundary). WARC specifies CRLF, so count +2 per line.
 	for i := 0; i < 2; i++ {
 		boundary, _, err := r.bufReader.ReadLine()
+		// Count consumed boundary line including CRLF. (bufio.ReadLine strips EOL.)
+		bytesRead += int64(len(boundary)) + 2
 		if err != nil {
 			if err == io.EOF {
 				// record shall consist of a record header followed by a record content block and two newlines
-				return r.record, false, fmt.Errorf("early EOF record boundary: %w", err)
+				return r.record, bytesRead, fmt.Errorf("early EOF record boundary: %w", err)
 			}
-			return r.record, false, fmt.Errorf("reading record boundary: %w", err)
+			return r.record, bytesRead, fmt.Errorf("reading record boundary: %w", err)
 		}
-
 		if len(boundary) != 0 {
-			return r.record, false, fmt.Errorf("non-empty record boundary [boundary: %s]", boundary)
+			return r.record, bytesRead, fmt.Errorf("non-empty record boundary [boundary: %s]", boundary)
 		}
 	}
 
-	return r.record, false, nil // ok
+	return r.record, bytesRead, nil
 }
 
 // ReadOpts are options for ReadRecord
