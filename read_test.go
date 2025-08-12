@@ -469,3 +469,125 @@ func BenchmarkBasicRead(b *testing.B) {
 		}
 	}
 }
+
+// ---------- Bench helpers ----------
+
+type readerFn func(*bufio.Reader, []byte) ([]byte, int64, error)
+
+var (
+	sinkLine []byte
+	sinkN    int64
+	sinkErr  error
+)
+
+// replace makePayload with this version:
+func makePayload(totalSize int, delim []byte, placement string) (payload []byte, wantN int) {
+	if totalSize < len(delim) {
+		totalSize = len(delim)
+	}
+	buf := bytes.Repeat([]byte{'a'}, totalSize)
+
+	switch placement {
+	case "end":
+		pos := totalSize - len(delim) // where delim starts
+		copy(buf[pos:], delim)
+		return buf, pos + len(delim) // bytes consumed incl. delim
+
+	case "mid":
+		pos := totalSize/2 - len(delim)/2 // center-ish, clamped below
+		if pos < 0 {
+			pos = 0
+		}
+		if pos+len(delim) > totalSize {
+			pos = totalSize - len(delim)
+		}
+		copy(buf[pos:], delim)
+		return buf, pos + len(delim) // bytes consumed incl. delim
+
+	case "none":
+		// No delimiter found: we consume everything and return io.EOF.
+		return buf, totalSize
+
+	default:
+		// default to "end"
+		pos := totalSize - len(delim)
+		copy(buf[pos:], delim)
+		return buf, pos + len(delim)
+	}
+}
+
+func benchReadUntil(b *testing.B, name string, fn readerFn) {
+	delimCases := [][]byte{
+		[]byte("\r\n"), // CRLF
+	}
+	sizes := []int{1 << 10, 1 << 16, 1 << 20} // 1 KiB, 64 KiB, 1 MiB
+	placements := []string{"end", "mid", "none"}
+
+	for _, d := range delimCases {
+		for _, sz := range sizes {
+			for _, place := range placements {
+				payload, wantN := makePayload(sz, d, place)
+				caseName := name + "/delim=" + prettyDelim(d) + "/size=" + human(sz) + "/place=" + place
+
+				b.Run(caseName, func(b *testing.B) {
+					b.ReportAllocs()
+					b.SetBytes(int64(wantN))
+					// quick correctness check only once to avoid heavy overhead
+					r := bufio.NewReader(bytes.NewReader(payload))
+					line, n, err := fn(r, d)
+					if place == "none" {
+						if err != io.EOF {
+							b.Fatalf("expected EOF (none), got %v", err)
+						}
+					} else if err != nil {
+						b.Fatalf("unexpected err: %v", err)
+					}
+					if n != int64(wantN) {
+						b.Fatalf("n mismatch: got %d want %d", n, wantN)
+					}
+					_ = line // ignore length validation to keep overhead minimal
+
+					b.ResetTimer()
+					for i := 0; i < b.N; i++ {
+						r := bufio.NewReader(bytes.NewReader(payload))
+						line, n, err = fn(r, d)
+						// store to sinks to avoid dead-code elimination
+						sinkLine, sinkN, sinkErr = line, n, err
+					}
+				})
+			}
+		}
+	}
+}
+
+func prettyDelim(d []byte) string {
+	switch string(d) {
+	case "\r\n":
+		return "\\r\\n"
+	default:
+		return string(d)
+	}
+}
+
+func human(n int) string {
+	switch {
+	case n >= 1<<20:
+		return "1MiB"
+	case n >= 1<<16:
+		return "64KiB"
+	case n >= 1<<10:
+		return "1KiB"
+	default:
+		return "bytes"
+	}
+}
+
+// ---------- Bench entry points ----------
+
+func BenchmarkReadUntilDelim_Bytewise(b *testing.B) {
+	benchReadUntil(b, "bytewise", readUntilDelim)
+}
+
+func BenchmarkReadUntilDelim_Chunked(b *testing.B) {
+	benchReadUntil(b, "chunked", readUntilDelimChunked)
+}

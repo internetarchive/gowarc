@@ -81,6 +81,43 @@ func readUntilDelim(r *bufio.Reader, delim []byte) (line []byte, n int64, err er
 	}
 }
 
+// readUntilDelimChunked reads from r until the multi-byte delimiter `delim` is found.
+// It returns the bytes BEFORE the delimiter, the total number of bytes consumed
+// from r (including the delimiter), and an error. If EOF occurs before seeing
+// the delimiter, it returns the data read and io.EOF.
+// This function is designed to handle larger inputs by reading in chunks.
+func readUntilDelimChunked(r *bufio.Reader, delim []byte) (line []byte, n int64, err error) {
+	if len(delim) == 0 {
+		return nil, 0, errors.New("empty delimiter")
+	}
+	last := delim[len(delim)-1]
+	var buf []byte
+
+	for {
+		part, e := r.ReadSlice(last)
+		n += int64(len(part))
+		buf = append(buf, part...)
+
+		start := len(buf) - len(part) - (len(delim) - 1)
+		if start < 0 {
+			start = 0
+		}
+		if i := bytes.Index(buf[start:], delim); i >= 0 {
+			i += start
+			return buf[:i], n, nil
+		}
+		if e != nil {
+			if e == bufio.ErrBufferFull {
+				continue
+			}
+			if e == io.EOF {
+				return buf, n, io.EOF
+			}
+			return buf, n, e
+		}
+	}
+}
+
 // ReadRecord reads the next record from the opened WARC file.
 // Returns:
 //   - *Record: nil when at clean EOF (no more records).
