@@ -138,7 +138,7 @@ func (r *Reader) ReadRecord(opts ...ReadOpts) (*Record, int64, error) {
 	}
 
 	// first line: WARC version
-	warcVer, n, err := readUntilDelim(r.bufReader, []byte("\r\n"))
+	warcVer, n, err := readUntilDelimChunked(r.bufReader, []byte("\r\n"))
 	bytesRead += n
 	if err != nil {
 		if err == io.EOF && len(warcVer) == 0 {
@@ -151,7 +151,7 @@ func (r *Reader) ReadRecord(opts ...ReadOpts) (*Record, int64, error) {
 	// Parse the record headers
 	header := NewHeader()
 	for {
-		line, n, err := readUntilDelim(r.bufReader, []byte("\r\n"))
+		line, n, err := readUntilDelimChunked(r.bufReader, []byte("\r\n"))
 		bytesRead += n
 		if err != nil {
 			return nil, bytesRead, fmt.Errorf("reading header: %w", err)
@@ -191,7 +191,7 @@ func (r *Reader) ReadRecord(opts ...ReadOpts) (*Record, int64, error) {
 
 	// Skip two empty lines (record boundary). WARC specifies CRLF, so count +2 per line.
 	for i := 0; i < 2; i++ {
-		boundary, n, err := readUntilDelim(r.bufReader, []byte("\r\n"))
+		boundary, n, err := readUntilDelimChunked(r.bufReader, []byte("\r\n"))
 		// Count consumed boundary line including CRLF. (bufio.ReadLine strips EOL.)
 		bytesRead += n
 		if err != nil {

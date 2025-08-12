@@ -470,71 +470,172 @@ func BenchmarkBasicRead(b *testing.B) {
 	}
 }
 
-// ---------- Bench helpers ----------
-
 type readerFn func(*bufio.Reader, []byte) ([]byte, int64, error)
 
 var (
-	sinkLine []byte
-	sinkN    int64
-	sinkErr  error
+	sinkN   int64
+	sinkErr error
 )
 
-// replace makePayload with this version:
-func makePayload(totalSize int, delim []byte, placement string) (payload []byte, wantN int) {
-	if totalSize < len(delim) {
-		totalSize = len(delim)
+// ---------------- Synthetic reader ----------------
+
+type synthReader struct {
+	total      int64
+	pos        int64
+	delim      []byte
+	delimStart int64 // -1 means no delimiter
+}
+
+func newSynthReader(total int64, delim []byte, placement string) *synthReader {
+	s := &synthReader{
+		total:      total,
+		delim:      delim,
+		delimStart: -1,
 	}
-	buf := bytes.Repeat([]byte{'a'}, totalSize)
-
+	if len(delim) == 0 {
+		return s
+	}
 	switch placement {
-	case "end":
-		pos := totalSize - len(delim) // where delim starts
-		copy(buf[pos:], delim)
-		return buf, pos + len(delim) // bytes consumed incl. delim
-
+	case "head":
+		start := int64(8)
+		if start+int64(len(delim)) <= total {
+			s.delimStart = start
+		}
 	case "mid":
-		pos := totalSize/2 - len(delim)/2 // center-ish, clamped below
+		start := total/2 - int64(len(delim))/2
+		if start < 0 {
+			start = 0
+		}
+		if start+int64(len(delim)) > total {
+			start = total - int64(len(delim))
+		}
+		s.delimStart = start
+	case "end":
+		if total >= int64(len(delim)) {
+			s.delimStart = total - int64(len(delim))
+		}
+	case "none":
+		// leave at -1
+	default:
+		if total >= int64(len(delim)) {
+			s.delimStart = total - int64(len(delim))
+		}
+	}
+	return s
+}
+
+func (s *synthReader) Read(p []byte) (int, error) {
+	if s.pos >= s.total {
+		return 0, io.EOF
+	}
+	// Before delimiter
+	if s.delimStart >= 0 && s.pos < s.delimStart {
+		max := min64(int64(len(p)), s.delimStart-s.pos)
+		fillA(p[:max])
+		s.pos += max
+		if s.pos >= s.total {
+			return int(max), io.EOF
+		}
+		return int(max), nil
+	}
+	// Delimiter itself
+	if s.delimStart >= 0 && s.pos >= s.delimStart && s.pos < s.delimStart+int64(len(s.delim)) {
+		off := s.pos - s.delimStart
+		max := min64(int64(len(p)), int64(len(s.delim))-off)
+		copy(p[:max], s.delim[off:])
+		s.pos += max
+		if s.pos >= s.total {
+			return int(max), io.EOF
+		}
+		return int(max), nil
+	}
+	// After delimiter or no delimiter
+	max := min64(int64(len(p)), s.total-s.pos)
+	fillA(p[:max])
+	s.pos += max
+	if s.pos >= s.total {
+		return int(max), io.EOF
+	}
+	return int(max), nil
+}
+
+func fillA(b []byte) {
+	for i := range b {
+		b[i] = 'a'
+	}
+}
+
+func min64(a, b int64) int64 {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// ---------------- Bench helpers ----------------
+
+func makeStream(totalSize int64, delim []byte, placement string) (io.Reader, int64) {
+	var wantN int64
+	switch placement {
+	case "head":
+		wantN = 8 + int64(len(delim))
+	case "mid":
+		pos := totalSize/2 - int64(len(delim))/2
 		if pos < 0 {
 			pos = 0
 		}
-		if pos+len(delim) > totalSize {
-			pos = totalSize - len(delim)
+		if pos+int64(len(delim)) > totalSize {
+			pos = totalSize - int64(len(delim))
 		}
-		copy(buf[pos:], delim)
-		return buf, pos + len(delim) // bytes consumed incl. delim
-
+		wantN = pos + int64(len(delim))
+	case "end":
+		wantN = totalSize
 	case "none":
-		// No delimiter found: we consume everything and return io.EOF.
-		return buf, totalSize
-
+		wantN = totalSize
 	default:
-		// default to "end"
-		pos := totalSize - len(delim)
-		copy(buf[pos:], delim)
-		return buf, pos + len(delim)
+		wantN = totalSize
 	}
+	return newSynthReader(totalSize, delim, placement), wantN
 }
 
 func benchReadUntil(b *testing.B, name string, fn readerFn) {
 	delimCases := [][]byte{
-		[]byte("\r\n"), // CRLF
+		[]byte("\r\n"),
 	}
-	sizes := []int{1 << 10, 1 << 16, 1 << 20} // 1 KiB, 64 KiB, 1 MiB
-	placements := []string{"end", "mid", "none"}
+
+	sizes := []int64{
+		1 << 10,   // 1 KiB
+		16 << 10,  // 16 KiB
+		64 << 10,  // 64 KiB
+		256 << 10, // 256 KiB
+		1 << 20,   // 1 MiB
+		4 << 20,   // 4 MiB
+		16 << 20,  // 16 MiB
+		64 << 20,  // 64 MiB
+		256 << 20, // 256 MiB
+		1 << 30,   // 1 GiB
+	}
+
+	basePlacements := []string{"head", "mid", "end", "none"}
 
 	for _, d := range delimCases {
 		for _, sz := range sizes {
+			var placements []string
+			for _, p := range basePlacements {
+				placements = append(placements, p)
+			}
+
 			for _, place := range placements {
-				payload, wantN := makePayload(sz, d, place)
-				caseName := name + "/delim=" + prettyDelim(d) + "/size=" + human(sz) + "/place=" + place
+				_, wantN := makeStream(sz, d, place)
+				caseName := fmt.Sprintf("%s/delim=%s/size=%s/place=%s", name, prettyDelim(d), human(sz), place)
 
 				b.Run(caseName, func(b *testing.B) {
 					b.ReportAllocs()
-					b.SetBytes(int64(wantN))
-					// quick correctness check only once to avoid heavy overhead
-					r := bufio.NewReader(bytes.NewReader(payload))
-					line, n, err := fn(r, d)
+					b.SetBytes(wantN)
+
+					// correctness check
+					rdr := bufio.NewReaderSize(newSynthReader(sz, d, place), 64<<10)
+					_, n, err := fn(rdr, d)
 					if place == "none" {
 						if err != io.EOF {
 							b.Fatalf("expected EOF (none), got %v", err)
@@ -542,17 +643,15 @@ func benchReadUntil(b *testing.B, name string, fn readerFn) {
 					} else if err != nil {
 						b.Fatalf("unexpected err: %v", err)
 					}
-					if n != int64(wantN) {
+					if n != wantN {
 						b.Fatalf("n mismatch: got %d want %d", n, wantN)
 					}
-					_ = line // ignore length validation to keep overhead minimal
 
 					b.ResetTimer()
 					for i := 0; i < b.N; i++ {
-						r := bufio.NewReader(bytes.NewReader(payload))
-						line, n, err = fn(r, d)
-						// store to sinks to avoid dead-code elimination
-						sinkLine, sinkN, sinkErr = line, n, err
+						rdr := bufio.NewReaderSize(newSynthReader(sz, d, place), 64<<10)
+						_, n, err = fn(rdr, d)
+						sinkN, sinkErr = n, err
 					}
 				})
 			}
@@ -563,26 +662,40 @@ func benchReadUntil(b *testing.B, name string, fn readerFn) {
 func prettyDelim(d []byte) string {
 	switch string(d) {
 	case "\r\n":
-		return "\\r\\n"
+		return `\r\n`
 	default:
 		return string(d)
 	}
 }
 
-func human(n int) string {
+func human(n int64) string {
 	switch {
+	case n >= 1<<30:
+		return "1GiB"
+	case n >= 256<<20:
+		return "256MiB"
+	case n >= 64<<20:
+		return "64MiB"
+	case n >= 16<<20:
+		return "16MiB"
+	case n >= 4<<20:
+		return "4MiB"
 	case n >= 1<<20:
 		return "1MiB"
-	case n >= 1<<16:
+	case n >= 256<<10:
+		return "256KiB"
+	case n >= 64<<10:
 		return "64KiB"
+	case n >= 16<<10:
+		return "16KiB"
 	case n >= 1<<10:
 		return "1KiB"
 	default:
-		return "bytes"
+		return fmt.Sprintf("%dB", n)
 	}
 }
 
-// ---------- Bench entry points ----------
+// ---------------- Entry points ----------------
 
 func BenchmarkReadUntilDelim_Bytewise(b *testing.B) {
 	benchReadUntil(b, "bytewise", readUntilDelim)
