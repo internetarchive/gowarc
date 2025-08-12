@@ -3,6 +3,7 @@ package warc
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -16,10 +17,6 @@ type Reader struct {
 	bufReader *bufio.Reader
 	record    *Record
 	threshold int
-}
-
-type reader interface {
-	ReadBytes(delim byte) (line []byte, err error)
 }
 
 // NewReader returns a new WARC reader
@@ -43,21 +40,43 @@ func NewReader(reader io.ReadCloser) (*Reader, error) {
 	}, nil
 }
 
-// readUntilDelim reads until delim (inclusive) and returns the line (without delim)
-// and the number of bytes consumed (including the delim).
-func readUntilDelim(r reader, delim []byte) (line []byte, n int64, err error) {
+// readUntilDelim reads from r until the multi-byte delimiter `delim` is found.
+// It returns the bytes BEFORE the delimiter, the total number of bytes consumed
+// from r (including the delimiter), and an error. If EOF occurs before seeing
+// the delimiter, it returns the data read and io.EOF.
+func readUntilDelim(r *bufio.Reader, delim []byte) (line []byte, n int64, err error) {
+	if len(delim) == 0 {
+		return nil, 0, errors.New("empty delimiter")
+	}
+
+	var buf bytes.Buffer
+	window := make([]byte, 0, len(delim))
+
 	for {
-		var chunk []byte
-		chunk, err = r.ReadBytes(delim[len(delim)-1])
-		n += int64(len(chunk))
-		line = append(line, chunk...)
-		if err != nil {
-			// return what we have (may be partial) along with the error
-			return line, n, err
+		b, e := r.ReadByte()
+		if e != nil {
+			if e == io.EOF {
+				if buf.Len() == 0 {
+					return nil, n, io.EOF
+				}
+				return buf.Bytes(), n, io.EOF
+			}
+			return buf.Bytes(), n, e
 		}
-		if bytes.HasSuffix(line, delim) {
-			// drop the delimiter from the returned line
-			return line[:len(line)-len(delim)], n, nil
+
+		n++
+		_ = buf.WriteByte(b)
+
+		if len(window) < len(delim) {
+			window = append(window, b)
+		} else {
+			copy(window, window[1:])
+			window[len(window)-1] = b
+		}
+
+		if len(window) == len(delim) && bytes.Equal(window, delim) {
+			buf.Truncate(buf.Len() - len(delim))
+			return buf.Bytes(), n, nil
 		}
 	}
 }
@@ -135,9 +154,9 @@ func (r *Reader) ReadRecord(opts ...ReadOpts) (*Record, int64, error) {
 
 	// Skip two empty lines (record boundary). WARC specifies CRLF, so count +2 per line.
 	for i := 0; i < 2; i++ {
-		boundary, _, err := r.bufReader.ReadLine()
+		boundary, n, err := readUntilDelim(r.bufReader, []byte("\r\n"))
 		// Count consumed boundary line including CRLF. (bufio.ReadLine strips EOL.)
-		bytesRead += int64(len(boundary)) + 2
+		bytesRead += n
 		if err != nil {
 			if err == io.EOF {
 				// record shall consist of a record header followed by a record content block and two newlines
