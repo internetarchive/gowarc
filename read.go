@@ -91,6 +91,9 @@ func readUntilDelimChunked(r *bufio.Reader, delim []byte) (line []byte, n int64,
 		return nil, 0, errors.New("empty delimiter")
 	}
 	last := delim[len(delim)-1]
+	// preallocating buffer makes performances worse for head/mid placements
+	// due to the unnecessary zeroing of the memory
+	// and yields low ot no improvements for end/none placements
 	var buf []byte
 
 	for {
@@ -128,17 +131,22 @@ func (r *Reader) ReadRecord(opts ...ReadOpts) (*Record, int64, error) {
 		err            error
 		discardContent bool
 		bytesRead      int64
+		readFn         func(r *bufio.Reader, delim []byte) (line []byte, n int64, err error)
 	)
+
+	readFn = readUntilDelimChunked
 
 	for _, opt := range opts {
 		switch opt {
 		case ReadOptsNoContentOutput:
 			discardContent = true
+		case ReadOptsBytewiseRead:
+			readFn = readUntilDelim
 		}
 	}
 
 	// first line: WARC version
-	warcVer, n, err := readUntilDelimChunked(r.bufReader, []byte("\r\n"))
+	warcVer, n, err := readFn(r.bufReader, []byte("\r\n"))
 	bytesRead += n
 	if err != nil {
 		if err == io.EOF && len(warcVer) == 0 {
@@ -151,7 +159,7 @@ func (r *Reader) ReadRecord(opts ...ReadOpts) (*Record, int64, error) {
 	// Parse the record headers
 	header := NewHeader()
 	for {
-		line, n, err := readUntilDelimChunked(r.bufReader, []byte("\r\n"))
+		line, n, err := readFn(r.bufReader, []byte("\r\n"))
 		bytesRead += n
 		if err != nil {
 			return nil, bytesRead, fmt.Errorf("reading header: %w", err)
@@ -191,7 +199,7 @@ func (r *Reader) ReadRecord(opts ...ReadOpts) (*Record, int64, error) {
 
 	// Skip two empty lines (record boundary). WARC specifies CRLF, so count +2 per line.
 	for i := 0; i < 2; i++ {
-		boundary, n, err := readUntilDelimChunked(r.bufReader, []byte("\r\n"))
+		boundary, n, err := readFn(r.bufReader, []byte("\r\n"))
 		// Count consumed boundary line including CRLF. (bufio.ReadLine strips EOL.)
 		bytesRead += n
 		if err != nil {
@@ -216,4 +224,7 @@ const (
 	// ReadOptsNoContentOutput means that the content of the record should not be returned.
 	// This is useful for reading only the headers or metadata of the record.
 	ReadOptsNoContentOutput ReadOpts = iota
+	// ReadOptsBytewiseRead means that the record should be read byte by byte.
+	// This is provided for testing purposes as the chunked read is benchmarked to be more efficient.
+	ReadOptsBytewiseRead
 )
