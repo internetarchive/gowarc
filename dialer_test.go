@@ -1,6 +1,7 @@
 package warc
 
 import (
+	"bytes"
 	"io"
 	"strings"
 	"testing"
@@ -93,5 +94,74 @@ Accept: */*
 	}
 	if err3.Error() != "parseRequestTargetURI: failed to parse host and target from request" {
 		t.Fatalf("Unexpected error: %v", err3)
+	}
+}
+
+func TestFindEndOfHeadersOffset(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected int
+		wantErr  bool
+	}{
+		{
+			name: "Simple headers with CRLF",
+			input: "HTTP/1.1 200 OK\r\n" +
+				"Content-Type: text/plain\r\n" +
+				"\r\n" +
+				"Body starts here",
+			expected: 45,
+			wantErr:  false,
+		},
+		{
+			name:     "Headers with extra whitespace before end",
+			input:    "GET / HTTP/1.1\r\nHost: test\r\n\r\nBody",
+			expected: 30,
+			wantErr:  false,
+		},
+		{
+			name:     "Headers with no body",
+			input:    "GET / HTTP/1.1\r\nHost: test\r\n\r\n",
+			expected: 30,
+			wantErr:  false,
+		},
+		{
+			name:     "No end of headers",
+			input:    "GET / HTTP/1.1\r\nHost: test\r\nNo end here",
+			expected: -1,
+			wantErr:  true,
+		},
+		{
+			name:     "Multiple header blocks",
+			input:    "GET / HTTP/1.1\r\nHost: test\r\n\r\nSecond block\r\n\r\n",
+			expected: 30,
+			wantErr:  false,
+		},
+		{
+			name:     "End of headers at the very end",
+			input:    "Header: value\r\n\r\n",
+			expected: 17,
+			wantErr:  false,
+		},
+		{
+			name:     "LF only should not match",
+			input:    "Header: value\n\n",
+			expected: -1,
+			wantErr:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rs := bytes.NewReader([]byte(tt.input))
+			got, err := findEndOfHeadersOffset(rs)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("findEndOfHeadersOffset() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if got != tt.expected {
+				t.Errorf("findEndOfHeadersOffset() = %v, expected %v", got, tt.expected)
+			}
+		})
 	}
 }

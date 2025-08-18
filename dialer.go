@@ -574,60 +574,10 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 		responseRecord.Header.Set("WARC-Truncated", "length")
 
 		// Find the position of the end of the headers
-		_, err := responseRecord.Content.Seek(0, 0)
+		endOfHeadersOffset, err := findEndOfHeadersOffset(responseRecord.Content)
 		if err != nil {
-			return fmt.Errorf("readResponse: could not seek to the beginning of the content: %s", err.Error())
+			return fmt.Errorf("readResponse: %s", err.Error())
 		}
-
-		found := false
-		bigBlock := make([]byte, 0, 4)
-		block := make([]byte, 1)
-		endOfHeadersOffset := 0
-		for {
-			n, err := responseRecord.Content.Read(block)
-			if n > 0 {
-				switch len(bigBlock) {
-				case 0:
-					if string(block) == "\r" {
-						bigBlock = append(bigBlock, block...)
-					}
-				case 1:
-					if string(block) == "\n" {
-						bigBlock = append(bigBlock, block...)
-					} else {
-						bigBlock = nil
-					}
-				case 2:
-					if string(block) == "\r" {
-						bigBlock = append(bigBlock, block...)
-					} else {
-						bigBlock = nil
-					}
-				case 3:
-					if string(block) == "\n" {
-						bigBlock = append(bigBlock, block...)
-						found = true
-					} else {
-						bigBlock = nil
-					}
-				}
-
-				endOfHeadersOffset++
-
-				if found {
-					break
-				}
-			}
-
-			if err == io.EOF {
-				break
-			}
-
-			if err != nil {
-				return err
-			}
-		}
-
 		// This should really never happen! This could be the result of a malfunctioning HTTP server or something currently unknown!
 		if endOfHeadersOffset == -1 {
 			return errors.New("readResponse: could not find the end of the headers")
@@ -635,7 +585,7 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 
 		// Write the data up until the end of the headers to a temporary buffer
 		tempBuffer := spooledtempfile.NewSpooledTempFile("warc", d.client.TempDir, -1, d.client.FullOnDisk, d.client.MaxRAMUsageFraction)
-		block = make([]byte, 1)
+		block := make([]byte, 1)
 		wrote := 0
 		responseRecord.Content.Seek(0, 0)
 		for {
@@ -671,6 +621,70 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 	}
 
 	return nil
+}
+
+// Scan a ReadSeeker for the sequence \r\n\r\n and return the offset just after it
+func findEndOfHeadersOffset(content io.ReadSeeker) (int, error) {
+	// Ensure reader is at the beginning
+	if _, err := content.Seek(0, io.SeekStart); err != nil {
+		return -1, fmt.Errorf("FindEndOfHeadersOffset: seek failed: %w", err)
+	}
+
+	found := false
+	bigBlock := make([]byte, 0, 4)
+	block := make([]byte, 1)
+	endOfHeadersOffset := 0
+
+	for {
+		n, err := content.Read(block)
+		if n > 0 {
+			switch len(bigBlock) {
+			case 0:
+				if string(block) == "\r" {
+					bigBlock = append(bigBlock, block...)
+				}
+			case 1:
+				if string(block) == "\n" {
+					bigBlock = append(bigBlock, block...)
+				} else {
+					bigBlock = nil
+				}
+			case 2:
+				if string(block) == "\r" {
+					bigBlock = append(bigBlock, block...)
+				} else {
+					bigBlock = nil
+				}
+			case 3:
+				if string(block) == "\n" {
+					bigBlock = append(bigBlock, block...)
+					found = true
+				} else {
+					bigBlock = nil
+				}
+			}
+
+			endOfHeadersOffset++
+
+			if found {
+				break
+			}
+		}
+
+		if err == io.EOF {
+			break
+		}
+
+		if err != nil {
+			return -1, err
+		}
+	}
+
+	if !found {
+		return -1, errors.New("FindEndOfHeadersOffset: could not find the end of the headers")
+	}
+
+	return endOfHeadersOffset, nil
 }
 
 func parseRequestTargetURI(scheme string, content io.ReadSeeker) (string, error) {
