@@ -23,45 +23,75 @@ const (
 	magicZStdSkippableFrame = "\x2a\x4d\x18"             // Magic bytes for the ZStd skippable frame format (RFC 8478, section 3.1.2)
 )
 
+type decReaderType int
+
+const (
+	decReaderGZip decReaderType = iota
+	decReaderBZip2
+	decReaderXZ
+	decReaderZStd
+	decReaderNone
+)
+
 // NewDecompressionReader will return a new reader transparently doing decompression of GZip, BZip2, XZ, and
 // ZStd.
-func NewDecompressionReader(r io.Reader) (io.Reader, error) {
+func NewDecompressionReader(r *countingReader) (io.ReadCloser, decReaderType, error) {
 	// Read magic bytes
 	br := bufio.NewReader(r)
 
 	magic, err := br.Peek(6)
 	if err != nil {
 		if err == io.EOF {
-			return io.NopCloser(br), nil
+			return io.NopCloser(br), decReaderNone, nil
 		}
 
-		return nil, fmt.Errorf("read magic bytes: %w", err)
+		return nil, decReaderNone, fmt.Errorf("read magic bytes: %w", err)
 	}
 
 	switch {
 	case string(magic[0:2]) == magicGZip:
 		// GZIP decompression
-		return decompressGZip(br)
+		dr, err := decompressGZip(br)
+		if err != nil {
+			return nil, decReaderNone, fmt.Errorf("read GZip stream: %w", err)
+		}
+		return dr, decReaderGZip, nil
 
 	case string(magic[0:2]) == magicBZip2:
 		// BZIP2 decompression
-		return decompressBzip2(br)
+		dr, err := decompressBzip2(br)
+		if err != nil {
+			return nil, decReaderNone, fmt.Errorf("read BZip2 stream: %w", err)
+		}
+		return dr, decReaderBZip2, nil
 
 	case string(magic[0:6]) == magicXZ:
 		// XZ decompression
-		return decompressXZ(br)
+		dr, err := decompressXZ(br)
+		if err != nil {
+			return nil, decReaderNone, fmt.Errorf("read XZ stream: %w", err)
+		}
+		return dr, decReaderXZ, nil
 
 	case string(magic[0:4]) == magicZStdFrame:
 		// ZStd decompression
-		return decompressZStd(br)
+		dr, err := decompressZStd(br)
+		if err != nil {
+			return nil, decReaderNone, fmt.Errorf("read ZStd stream: %w", err)
+		}
+		return dr, decReaderZStd, nil
 
 	case (string(magic[1:4]) == magicZStdSkippableFrame) && (magic[0]&0xf0 == 0x50):
 		// ZStd decompression with custom dictionary
-		return decompressZStdCustomDict(br)
+		dr, err := decompressZStdCustomDict(br)
+		if err != nil {
+			return nil, decReaderNone, fmt.Errorf("read ZStd skippable frame: %w", err)
+		}
+		return dr, decReaderZStd, nil
 
 	default:
 		// Use no decompression
-		return io.NopCloser(br), nil
+		return io.NopCloser(br), decReaderNone, nil
 	}
 }
 
@@ -72,6 +102,8 @@ func decompressGZip(br *bufio.Reader) (io.ReadCloser, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read GZip stream: %w", err)
 	}
+
+	dr.Multistream(false) // prevent crossing into next member on prefetch
 
 	return dr, nil
 }

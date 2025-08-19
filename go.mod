@@ -3,6 +3,7 @@ module github.com/internetarchive/gowarc
 go 1.24.2
 
 require (
+	github.com/davecgh/go-spew v1.1.1
 	github.com/google/uuid v1.6.0
 	github.com/klauspost/compress v1.18.0
 	github.com/maypok86/otter v1.2.4
