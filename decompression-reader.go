@@ -4,7 +4,7 @@
 package warc
 
 import (
-	"bufio"
+	"bytes"
 	"compress/bzip2"
 	"encoding/binary"
 	"fmt"
@@ -33,25 +33,26 @@ const (
 	decReaderNone
 )
 
-// NewDecompressionReader will return a new reader transparently doing decompression of GZip, BZip2, XZ, and
+// newDecompressionReader will return a new reader transparently doing decompression of GZip, BZip2, XZ, and
 // ZStd.
-func NewDecompressionReader(r *countingReader) (io.ReadCloser, decReaderType, error) {
-	// Read magic bytes
-	br := bufio.NewReader(r)
-
-	magic, err := br.Peek(6)
+func newDecompressionReader(cr *countingReader) (io.ReadCloser, decReaderType, error) {
+	magic, err := readExactly(cr, 6)
+	if err == io.EOF || err == io.ErrUnexpectedEOF {
+		// Clean EOF: nothing to read.
+		return nil, decReaderNone, nil
+	}
 	if err != nil {
-		if err == io.EOF {
-			return io.NopCloser(br), decReaderNone, nil
-		}
-
 		return nil, decReaderNone, fmt.Errorf("read magic bytes: %w", err)
 	}
+
+	// rebuild stream to include consumed magic bytes
+	rest := io.MultiReader(bytes.NewReader(magic), cr)
+	cr = &countingReader{r: rest}
 
 	switch {
 	case string(magic[0:2]) == magicGZip:
 		// GZIP decompression
-		dr, err := decompressGZip(br)
+		dr, err := decompressGZip(cr)
 		if err != nil {
 			return nil, decReaderNone, fmt.Errorf("read GZip stream: %w", err)
 		}
@@ -59,7 +60,7 @@ func NewDecompressionReader(r *countingReader) (io.ReadCloser, decReaderType, er
 
 	case string(magic[0:2]) == magicBZip2:
 		// BZIP2 decompression
-		dr, err := decompressBzip2(br)
+		dr, err := decompressBzip2(cr)
 		if err != nil {
 			return nil, decReaderNone, fmt.Errorf("read BZip2 stream: %w", err)
 		}
@@ -67,7 +68,7 @@ func NewDecompressionReader(r *countingReader) (io.ReadCloser, decReaderType, er
 
 	case string(magic[0:6]) == magicXZ:
 		// XZ decompression
-		dr, err := decompressXZ(br)
+		dr, err := decompressXZ(cr)
 		if err != nil {
 			return nil, decReaderNone, fmt.Errorf("read XZ stream: %w", err)
 		}
@@ -75,7 +76,7 @@ func NewDecompressionReader(r *countingReader) (io.ReadCloser, decReaderType, er
 
 	case string(magic[0:4]) == magicZStdFrame:
 		// ZStd decompression
-		dr, err := decompressZStd(br)
+		dr, err := decompressZStd(cr)
 		if err != nil {
 			return nil, decReaderNone, fmt.Errorf("read ZStd stream: %w", err)
 		}
@@ -83,7 +84,7 @@ func NewDecompressionReader(r *countingReader) (io.ReadCloser, decReaderType, er
 
 	case (string(magic[1:4]) == magicZStdSkippableFrame) && (magic[0]&0xf0 == 0x50):
 		// ZStd decompression with custom dictionary
-		dr, err := decompressZStdCustomDict(br)
+		dr, err := decompressZStdCustomDict(cr)
 		if err != nil {
 			return nil, decReaderNone, fmt.Errorf("read ZStd skippable frame: %w", err)
 		}
@@ -91,12 +92,12 @@ func NewDecompressionReader(r *countingReader) (io.ReadCloser, decReaderType, er
 
 	default:
 		// Use no decompression
-		return io.NopCloser(br), decReaderNone, nil
+		return io.NopCloser(cr), decReaderNone, nil
 	}
 }
 
 // decompressGZip decompresses a GZip stream from the given input reader r.
-func decompressGZip(br *bufio.Reader) (io.ReadCloser, error) {
+func decompressGZip(br *countingReader) (io.ReadCloser, error) {
 	// Open GZip reader
 	dr, err := gzip.NewReader(br)
 	if err != nil {
@@ -109,7 +110,7 @@ func decompressGZip(br *bufio.Reader) (io.ReadCloser, error) {
 }
 
 // decompressBZip2 decompresses a BZip2 stream from the given input reader r.
-func decompressBzip2(br *bufio.Reader) (io.ReadCloser, error) {
+func decompressBzip2(br *countingReader) (io.ReadCloser, error) {
 	// Open BZip2 reader
 	dr := bzip2.NewReader(br)
 
@@ -117,7 +118,7 @@ func decompressBzip2(br *bufio.Reader) (io.ReadCloser, error) {
 }
 
 // decompressXZ decompresses an XZ stream from the given input reader r.
-func decompressXZ(br *bufio.Reader) (io.ReadCloser, error) {
+func decompressXZ(br *countingReader) (io.ReadCloser, error) {
 	// Open XZ reader
 	dr, err := xz.NewReader(br)
 	if err != nil {
@@ -128,7 +129,7 @@ func decompressXZ(br *bufio.Reader) (io.ReadCloser, error) {
 }
 
 // decompressZStd decompresses a ZStd stream from the given input reader r.
-func decompressZStd(br *bufio.Reader) (io.ReadCloser, error) {
+func decompressZStd(br *countingReader) (io.ReadCloser, error) {
 	// Open ZStd reader
 	dr, err := zstd.NewReader(br, zstd.WithDecoderConcurrency(1))
 	if err != nil {
@@ -140,7 +141,7 @@ func decompressZStd(br *bufio.Reader) (io.ReadCloser, error) {
 
 // decompressZStdCustomDict decompresses a ZStd stream with a prefixed custom dictionary from the given input
 // reader r.
-func decompressZStdCustomDict(br *bufio.Reader) (io.ReadCloser, error) {
+func decompressZStdCustomDict(br *countingReader) (io.ReadCloser, error) {
 	// Read header
 	var header [8]byte
 

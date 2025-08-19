@@ -3,7 +3,6 @@ package warc
 import (
 	"bufio"
 	"bytes"
-	"compress/gzip"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +10,7 @@ import (
 	"strconv"
 
 	"github.com/internetarchive/gowarc/pkg/spooledtempfile"
+	"github.com/klauspost/compress/gzip"
 )
 
 // Reader stores the bufio.Reader and gzip.Reader for a WARC file
@@ -18,13 +18,13 @@ type Reader struct {
 	record    *Record
 	threshold int
 
-	bufReader *bufio.Reader   // consuming layer
 	src       io.ReadCloser   // raw concatenated .gz input
 	cr        *countingReader // counts compressed bytes actually consumed
-	gz        *gzip.Reader    // active gzip decompressor (nil if not gzip)
 	dec       io.ReadCloser   // current decompressor (gz or plain)
-	inited    bool            // lazy init done
-	isGzip    bool            // compression type
+	bufReader *bufio.Reader   // consuming layer
+
+	inited   bool          // lazy init done
+	compType decReaderType // compression type
 }
 
 // countingReader counts bytes read from the underlying compressed stream.
@@ -190,50 +190,24 @@ func (r *Reader) ReadRecord(opts ...ReadOpts) (*Record, int64, error) {
 	startCompressed := r.cr.N()
 
 	if !r.inited {
-		magic, err := readExactly(r.cr, 6)
-		if err == io.EOF || err == io.ErrUnexpectedEOF {
-			// Clean EOF: nothing to read.
-			return nil, 0, nil
-		}
+		var err error
+		r.dec, r.compType, err = newDecompressionReader(r.cr)
 		if err != nil {
-			return nil, 0, fmt.Errorf("read magic bytes: %w", err)
-		}
-
-		// rebuild stream to include consumed magic bytes
-		rest := io.MultiReader(bytes.NewReader(magic), r.cr)
-		r.cr = &countingReader{r: rest}
-
-		if len(magic) >= 2 && magic[0] == 0x1f && magic[1] == 0x8b {
-			gz, err := gzip.NewReader(r.cr)
-			if err != nil {
-				return nil, 0, fmt.Errorf("open gzip: %w", err)
-			}
-			gz.Multistream(false) // prevent crossing into next member on prefetch
-			r.gz = gz
-			r.dec = gz
-			r.isGzip = true
-		} else { // fallback to standard decompression
-			r.dec, _, err = NewDecompressionReader(r.cr)
-			if err != nil {
-				return nil, 0, fmt.Errorf("decompression reader: %w", err)
-			}
-			r.isGzip = false
+			return nil, 0, fmt.Errorf("init decompression reader: %w", err)
 		}
 
 		r.bufReader = bufio.NewReader(r.dec) // prefetch is fine on *decompressed* side now
 		r.inited = true
 	} else {
-		if r.isGzip {
-			if err := r.gz.Reset(r.cr); err == io.EOF {
+		if r.compType == decReaderGZip {
+			if err := r.dec.(*gzip.Reader).Reset(r.cr); err == io.EOF {
 				// No more members: clean EOF.
 				return nil, 0, nil
 			} else if err != nil {
 				return nil, 0, fmt.Errorf("gzip reset: %w", err)
 			}
-			r.gz.Multistream(false)
+			r.dec.(*gzip.Reader).Multistream(false)
 			r.bufReader = bufio.NewReader(r.dec) // fresh buffer for new member
-		} else {
-			r.bufReader = bufio.NewReader(r.dec)
 		}
 	}
 
@@ -292,7 +266,7 @@ func (r *Reader) ReadRecord(opts ...ReadOpts) (*Record, int64, error) {
 		}
 	}
 
-	if r.isGzip {
+	if r.compType == decReaderGZip {
 		if _, derr := io.Copy(io.Discard, r.bufReader); derr != nil && derr != io.EOF {
 			return r.record, 0, fmt.Errorf("draining gzip member: %w", derr)
 		}
