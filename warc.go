@@ -68,7 +68,7 @@ func (s *RotatorSettings) NewWARCRotator() (recordWriterChan chan *RecordBatch, 
 	if s.CompressionDictionary != "" {
 		dictionary, err = os.ReadFile(s.CompressionDictionary)
 		if err != nil {
-			panic(err)
+			panic(fmt.Sprintf("failed to read compression dictionary file %s: %v", s.CompressionDictionary, err))
 		}
 	}
 
