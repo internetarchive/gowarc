@@ -63,11 +63,20 @@ func (s *RotatorSettings) NewWARCRotator() (recordWriterChan chan *RecordBatch, 
 		return recordWriterChan, doneChannels, err
 	}
 
+	var dictionary []byte
+
+	if s.CompressionDictionary != "" {
+		dictionary, err = os.ReadFile(s.CompressionDictionary)
+		if err != nil {
+			panic(err)
+		}
+	}
+
 	for i := 0; i < s.WARCWriterPoolSize; i++ {
 		doneChan := make(chan bool)
 		doneChannels = append(doneChannels, doneChan)
 
-		go recordWriter(s, recordWriterChan, doneChan, serial)
+		go recordWriter(s, recordWriterChan, doneChan, serial, dictionary)
 	}
 
 	return recordWriterChan, doneChannels, nil
@@ -83,7 +92,7 @@ func (w *Writer) CloseCompressedWriter() (err error) {
 	return err
 }
 
-func recordWriter(settings *RotatorSettings, records chan *RecordBatch, done chan bool, serial *atomic.Uint64) {
+func recordWriter(settings *RotatorSettings, records chan *RecordBatch, done chan bool, serial *atomic.Uint64, dictionary []byte) {
 	var (
 		currentFileName         = generateWarcFileName(settings.Prefix, settings.Compression, serial)
 		currentWarcinfoRecordID string
@@ -103,15 +112,6 @@ func recordWriter(settings *RotatorSettings, records chan *RecordBatch, done cha
 		panic(err)
 	}
 	fileMutex.Unlock()
-
-	var dictionary []byte
-
-	if settings.CompressionDictionary != "" {
-		dictionary, err = os.ReadFile(settings.CompressionDictionary)
-		if err != nil {
-			panic(err)
-		}
-	}
 
 	// Initialize WARC writer
 	warcWriter, err := NewWriter(warcFile, currentFileName, settings.Compression, "", true, dictionary)
