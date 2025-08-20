@@ -2,6 +2,7 @@ package warc
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path"
 	"strings"
