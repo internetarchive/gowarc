@@ -64,10 +64,18 @@ func readUntilDelim(r reader, delim []byte) (line []byte, err error) {
 //   - Record: if an error occurred, record **may be** nil. if eol is true, record **must be** nil.
 //   - bool (eol): if true, we readed all records successfully.
 //   - error: error
-func (r *Reader) ReadRecord() (*Record, bool, error) {
+func (r *Reader) ReadRecord(opts ...ReadOpts) (*Record, bool, error) {
 	var (
-		err        error
+		err            error
+		discardContent bool
 	)
+
+	for _, opt := range opts {
+		switch opt {
+		case ReadOptsNoContentOutput:
+			discardContent = true
+		}
+	}
 
 	// first line: WARC version
 	var warcVer []byte
@@ -102,7 +110,11 @@ func (r *Reader) ReadRecord() (*Record, bool, error) {
 
 	// reading doesn't really need to be in TempDir, nor can we access it as it's on the client.
 	buf := spooledtempfile.NewSpooledTempFile("warc", "", r.threshold, false, -1)
-	_, err = io.CopyN(buf, r.bufReader, length)
+	if discardContent {
+		_, err = io.CopyN(io.Discard, tempReader, length)
+	} else {
+		_, err = io.CopyN(buf, tempReader, length)
+	}
 	if err != nil {
 		return nil, false, fmt.Errorf("copying record content: %w", err)
 	}
@@ -131,3 +143,12 @@ func (r *Reader) ReadRecord() (*Record, bool, error) {
 
 	return r.record, false, nil // ok
 }
+
+// ReadOpts are options for ReadRecord
+type ReadOpts int
+
+const (
+	// ReadOptsNoContentOutput means that the content of the record should not be returned.
+	// This is useful for reading only the headers or metadata of the record.
+	ReadOptsNoContentOutput ReadOpts = iota
+)
