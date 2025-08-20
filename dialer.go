@@ -245,10 +245,10 @@ func (d *customDialer) CustomDialTLSContext(ctx context.Context, network, addres
 		return nil, err
 	}
 
-	cfg := new(tls.Config)
-	serverName := address[:strings.LastIndex(address, ":")]
-	cfg.ServerName = serverName
-	cfg.InsecureSkipVerify = d.client.verifyCerts
+	cfg := &tls.Config{
+		ServerName:         address[:strings.LastIndex(address, ":")],
+		InsecureSkipVerify: d.client.verifyCerts,
+	}
 
 	tlsConn := tls.UClient(plainConn, cfg, tls.HelloCustom)
 
@@ -256,23 +256,15 @@ func (d *customDialer) CustomDialTLSContext(ctx context.Context, network, addres
 		return nil, err
 	}
 
-	errc := make(chan error, 2)
-	timer := time.AfterFunc(d.client.TLSHandshakeTimeout, func() {
-		errc <- errors.New("TLS handshake timeout")
-	})
+	handshakeCtx, cancel := context.WithTimeout(ctx, d.client.TLSHandshakeTimeout)
+	defer cancel()
 
-	go func() {
-		err := tlsConn.HandshakeContext(ctx)
-		timer.Stop()
-		errc <- err
-	}()
-	if err := <-errc; err != nil {
+	if err := tlsConn.HandshakeContext(handshakeCtx); err != nil {
 		closeErr := plainConn.Close()
 		if closeErr != nil {
 			return nil, fmt.Errorf("CustomDialTLS: TLS handshake failed and closing plain connection failed: %s", closeErr.Error())
 		}
-
-		return nil, err
+		return nil, fmt.Errorf("CustomDialTLS: TLS handshake failed: %w", err)
 	}
 
 	return d.wrapConnection(ctx, tlsConn, "https"), nil
