@@ -67,7 +67,6 @@ func readUntilDelim(r reader, delim []byte) (line []byte, err error) {
 func (r *Reader) ReadRecord(opts ...ReadOpts) (*Record, bool, error) {
 	var (
 		err            error
-		tempReader     *bufio.Reader
 		discardContent bool
 	)
 
@@ -78,11 +77,9 @@ func (r *Reader) ReadRecord(opts ...ReadOpts) (*Record, bool, error) {
 		}
 	}
 
-	tempReader = bufio.NewReader(r.bufReader)
-
 	// first line: WARC version
 	var warcVer []byte
-	warcVer, err = readUntilDelim(tempReader, []byte("\r\n"))
+	warcVer, err = readUntilDelim(r.bufReader, []byte("\r\n"))
 	if err != nil {
 		if err == io.EOF {
 			return nil, true, nil // EOF, no error
@@ -93,7 +90,7 @@ func (r *Reader) ReadRecord(opts ...ReadOpts) (*Record, bool, error) {
 	// Parse the record headers
 	header := NewHeader()
 	for {
-		line, err := readUntilDelim(tempReader, []byte("\r\n"))
+		line, err := readUntilDelim(r.bufReader, []byte("\r\n"))
 		if err != nil {
 			return nil, false, fmt.Errorf("reading header: %w", err)
 		}
@@ -114,9 +111,9 @@ func (r *Reader) ReadRecord(opts ...ReadOpts) (*Record, bool, error) {
 	// reading doesn't really need to be in TempDir, nor can we access it as it's on the client.
 	buf := spooledtempfile.NewSpooledTempFile("warc", "", r.threshold, false, -1)
 	if discardContent {
-		_, err = io.CopyN(io.Discard, tempReader, length)
+		_, err = io.CopyN(io.Discard, r.bufReader, length)
 	} else {
-		_, err = io.CopyN(buf, tempReader, length)
+		_, err = io.CopyN(buf, r.bufReader, length)
 	}
 	if err != nil {
 		return nil, false, fmt.Errorf("copying record content: %w", err)
