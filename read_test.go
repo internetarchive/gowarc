@@ -614,7 +614,7 @@ func benchReadUntil(b *testing.B, name string, fn readerFn) {
 		for _, sz := range sizes {
 			var placements []string
 			for _, p := range basePlacements {
-				if ci := os.Getenv("CI"); ci != "" && sz >= 64<<20 {
+				if ci := os.Getenv("CI"); ci != "" && sz >= 1<<20 {
 					// skip large sizes on CI to avoid long test times
 					continue
 				}
