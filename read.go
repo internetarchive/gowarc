@@ -22,9 +22,9 @@ type Reader struct {
 	record    *Record
 	threshold int
 
-	src       io.ReadCloser   // raw concatenated .gz input
+	src       io.ReadCloser   // raw concatenated .gz input - wrapped in countingReader
 	cr        *countingReader // counts compressed bytes actually consumed
-	dec       io.ReadCloser   // current decompressor (gz or plain)
+	dec       io.ReadCloser   // current decompressor (gz or plain) - consumed by bufReader
 	bufReader *bufio.Reader   // consuming layer
 
 	inited   bool          // lazy init done
@@ -74,6 +74,29 @@ func NewReader(reader io.ReadCloser) (*Reader, error) {
 		src:       reader, // keep raw source
 		threshold: threshold,
 	}, nil
+}
+
+// Close closes the WARC reader src and dec readers if they are open.
+func (r *Reader) Close() error {
+	if !r.inited {
+		return nil
+	}
+
+	if r.src != nil {
+		if err := r.src.Close(); err != nil {
+			return fmt.Errorf("close source: %w", err)
+		}
+		r.src = nil
+	}
+
+	if r.dec != nil {
+		if err := r.dec.Close(); err != nil {
+			return fmt.Errorf("close decompressor: %w", err)
+		}
+		r.dec = nil
+	}
+
+	return nil
 }
 
 func readExactly(r io.Reader, n int) ([]byte, error) {
@@ -195,7 +218,7 @@ func (r *Reader) ReadRecord(opts ...ReadOpts) (*Record, int64, error) {
 
 	if !r.inited {
 		var err error
-		r.dec, r.compType, err = newDecompressionReader(r.cr)
+		r.dec, r.compType, err = r.cr.newDecompressionReader()
 		if err != nil {
 			return nil, 0, fmt.Errorf("init decompression reader: %w", err)
 		}
@@ -315,8 +338,8 @@ const (
 
 // newDecompressionReader will return a new reader transparently doing decompression of GZip, BZip2, XZ, and ZStd.
 // Only GZip is tested and used in production, the others are provided for completeness.
-func newDecompressionReader(cr *countingReader) (io.ReadCloser, decReaderType, error) {
-	magic, err := readExactly(cr, 6)
+func (c *countingReader) newDecompressionReader() (io.ReadCloser, decReaderType, error) {
+	magic, err := readExactly(c.r, 6)
 	if err == io.EOF || err == io.ErrUnexpectedEOF {
 		// Clean EOF: nothing to read.
 		return nil, decReaderNone, nil
@@ -326,13 +349,12 @@ func newDecompressionReader(cr *countingReader) (io.ReadCloser, decReaderType, e
 	}
 
 	// rebuild stream to include consumed magic bytes
-	rest := io.MultiReader(bytes.NewReader(magic), cr)
-	cr = &countingReader{r: rest}
+	c.r = io.MultiReader(bytes.NewReader(magic[:]), c.r)
 
 	switch {
 	case string(magic[0:2]) == magicGZip:
 		// GZIP decompression
-		dr, err := decompressGZip(cr)
+		dr, err := decompressGZip(c)
 		if err != nil {
 			return nil, decReaderNone, fmt.Errorf("read GZip stream: %w", err)
 		}
@@ -340,7 +362,7 @@ func newDecompressionReader(cr *countingReader) (io.ReadCloser, decReaderType, e
 
 	case string(magic[0:2]) == magicBZip2:
 		// BZIP2 decompression
-		dr, err := decompressBzip2(cr)
+		dr, err := decompressBzip2(c)
 		if err != nil {
 			return nil, decReaderNone, fmt.Errorf("read BZip2 stream: %w", err)
 		}
@@ -348,7 +370,7 @@ func newDecompressionReader(cr *countingReader) (io.ReadCloser, decReaderType, e
 
 	case string(magic[0:6]) == magicXZ:
 		// XZ decompression
-		dr, err := decompressXZ(cr)
+		dr, err := decompressXZ(c)
 		if err != nil {
 			return nil, decReaderNone, fmt.Errorf("read XZ stream: %w", err)
 		}
@@ -356,7 +378,7 @@ func newDecompressionReader(cr *countingReader) (io.ReadCloser, decReaderType, e
 
 	case string(magic[0:4]) == magicZStdFrame:
 		// ZStd decompression
-		dr, err := decompressZStd(cr)
+		dr, err := decompressZStd(c)
 		if err != nil {
 			return nil, decReaderNone, fmt.Errorf("read ZStd stream: %w", err)
 		}
@@ -364,7 +386,7 @@ func newDecompressionReader(cr *countingReader) (io.ReadCloser, decReaderType, e
 
 	case (string(magic[1:4]) == magicZStdSkippableFrame) && (magic[0]&0xf0 == 0x50):
 		// ZStd decompression with custom dictionary
-		dr, err := decompressZStdCustomDict(cr)
+		dr, err := decompressZStdCustomDict(c)
 		if err != nil {
 			return nil, decReaderNone, fmt.Errorf("read ZStd skippable frame: %w", err)
 		}
@@ -372,7 +394,7 @@ func newDecompressionReader(cr *countingReader) (io.ReadCloser, decReaderType, e
 
 	default:
 		// Use no decompression
-		return io.NopCloser(cr), decReaderNone, nil
+		return io.NopCloser(c), decReaderNone, nil
 	}
 }
 
@@ -425,9 +447,13 @@ func decompressZStdCustomDict(br *countingReader) (io.ReadCloser, error) {
 	// Read header
 	var header [8]byte
 
-	_, err := br.Read(header[:])
-	if err != nil {
-		return nil, fmt.Errorf("read ZStd skippable frame header: %w", err)
+	var nn int
+	for nn < len(header) {
+		n, err := br.Read(header[nn:])
+		if err != nil {
+			return nil, fmt.Errorf("read ZStd skippable frame header: %w", err)
+		}
+		nn += n
 	}
 
 	magic, length := header[0:4], binary.LittleEndian.Uint32(header[4:8])
