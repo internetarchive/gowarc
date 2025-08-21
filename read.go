@@ -17,6 +17,15 @@ import (
 	"github.com/ulikunitz/xz"
 )
 
+// -------- Perf knobs (env tunables) --------
+
+const (
+	envMaxInMemSize         = "WARCMaxInMemorySize"        // same as before
+	envDecompressedBufSize  = "WARCDecompressedBufSize"    // bytes; default 256 KiB
+	envZstdDecoderConc      = "WARCZstdDecoderConcurrency" // >1 enables parallel Zstd decode
+	defaultDecompressedSize = 256 << 10                    // 256 KiB is a good gzip/zstd sweet spot
+)
+
 // Reader stores the bufio.Reader and gzip.Reader for a WARC file
 type Reader struct {
 	record    *Record
@@ -24,19 +33,24 @@ type Reader struct {
 
 	src       io.ReadCloser   // raw concatenated .gz input - wrapped in countingReader
 	cr        *countingReader // counts compressed bytes actually consumed
-	dec       io.ReadCloser   // current decompressor (gz or plain) - consumed by bufReader
-	bufReader *bufio.Reader   // consuming layer
+	dec       io.ReadCloser   // current decompressor (gz/plain/…)
+	gz        *gzip.Reader    // cached when compType == decReaderGZip
+	bufReader *bufio.Reader   // consuming layer (reused via Reset)
 
-	inited   bool          // lazy init done
-	compType decReaderType // compression type
+	inited   bool
+	compType decReaderType
+
+	// perf hints
+	decompBufSize int // size for bufReader; env-tunable
 }
 
 // countingReader counts bytes read from the underlying compressed stream.
 // It must sit *above* the bufio.Reader used for the decompressor to avoid
 // counting upstream prefetch.
 type countingReader struct {
-	r io.Reader
-	n int64
+	r   io.Reader
+	n   int64
+	tmp [1]byte // avoid alloc in ReadByte
 }
 
 func (c *countingReader) Read(p []byte) (int, error) {
@@ -46,10 +60,18 @@ func (c *countingReader) Read(p []byte) (int, error) {
 }
 func (c *countingReader) N() int64 { return c.n }
 
-// ReadByte reads a single byte from the underlying reader and counts it. To satisfy the io.ByteReader interface.
+// ReadByte reads a single byte and counts it. No allocation; tries fast-path if the
+// underlying reader already implements io.ByteReader.
 func (c *countingReader) ReadByte() (byte, error) {
-	b := make([]byte, 1)
-	n, err := c.r.Read(b)
+	if br, ok := c.r.(io.ByteReader); ok {
+		b, err := br.ReadByte()
+		if err != nil {
+			return 0, err
+		}
+		c.n++
+		return b, nil
+	}
+	n, err := c.r.Read(c.tmp[:])
 	if n == 0 {
 		return 0, err
 	}
@@ -57,22 +79,33 @@ func (c *countingReader) ReadByte() (byte, error) {
 		return 0, err
 	}
 	c.n += int64(n)
-	return b[0], nil
+	return c.tmp[0], nil
 }
 
 // NewReader returns a new WARC reader
 func NewReader(reader io.ReadCloser) (*Reader, error) {
 	threshold := -1
-	if s := os.Getenv("WARCMaxInMemorySize"); s != "" {
+	if s := os.Getenv(envMaxInMemSize); s != "" {
 		if v, err := strconv.Atoi(s); err == nil {
 			threshold = v
 		} else {
 			return nil, err
 		}
 	}
+
+	decompSize := defaultDecompressedSize
+	if s := os.Getenv(envDecompressedBufSize); s != "" {
+		if v, err := strconv.Atoi(s); err == nil && v > 0 {
+			decompSize = v
+		} else if err != nil {
+			return nil, err
+		}
+	}
+
 	return &Reader{
-		src:       reader, // keep raw source
-		threshold: threshold,
+		src:           reader, // keep raw source
+		threshold:     threshold,
+		decompBufSize: decompSize,
 	}, nil
 }
 
@@ -97,15 +130,6 @@ func (r *Reader) Close() error {
 	}
 
 	return nil
-}
-
-func readExactly(r io.Reader, n int) ([]byte, error) {
-	b := make([]byte, n)
-	_, err := io.ReadFull(r, b) // ReadFull never over-reads
-	if err != nil {
-		return nil, err
-	}
-	return b, nil
 }
 
 // readUntilDelim reads from r until the multi-byte delimiter `delim` is found.
@@ -159,13 +183,10 @@ func readUntilDelimChunked(r *bufio.Reader, delim []byte) (line []byte, n int64,
 		return nil, 0, errors.New("empty delimiter")
 	}
 	last := delim[len(delim)-1]
-	// preallocating buffer makes performances worse for head/mid placements
-	// due to the unnecessary zeroing of the memory
-	// and yields low ot no improvements for end/none placements
 	var buf []byte
 
 	for {
-		part, e := r.ReadSlice(last)
+		part, e := r.ReadSlice(last) // fast path on '\n' for CRLF
 		n += int64(len(part))
 		buf = append(buf, part...)
 
@@ -189,6 +210,25 @@ func readUntilDelimChunked(r *bufio.Reader, delim []byte) (line []byte, n int64,
 	}
 }
 
+// discardN efficiently skips exactly n bytes from a bufio.Reader.
+// It leverages Reader.Discard which pulls from the underlying reader as needed.
+func discardN(r *bufio.Reader, n int64) error {
+	for n > 0 {
+		// Discard takes int; chunk to avoid int overflow on 32-bit.
+		chunk := int(n)
+		const maxInt = int(^uint(0) >> 1)
+		if chunk > maxInt {
+			chunk = maxInt
+		}
+		d, err := r.Discard(chunk)
+		n -= int64(d)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // ReadRecord reads the next record from the opened WARC file.
 //
 // Returns:
@@ -198,48 +238,58 @@ func readUntilDelimChunked(r *bufio.Reader, delim []byte) (line []byte, n int64,
 func (r *Reader) ReadRecord(opts ...ReadOpts) (*Record, int64, error) {
 	var (
 		discardContent bool
-		readFn         = readUntilDelimChunked
+		readFn         = readUntilDelimChunked // generic; uses ReadSlice for speed
 	)
 	for _, opt := range opts {
 		switch opt {
 		case ReadOptsNoContentOutput:
 			discardContent = true
 		case ReadOptsBytewiseRead:
-			readFn = readUntilDelim
+			readFn = readUntilDelim // force slow path for testing
 		}
 	}
 
-	// lazy init
+	// lazy init of counting reader
 	if r.cr == nil {
 		r.cr = &countingReader{r: r.src}
 	}
 
 	startCompressed := r.cr.N()
 
+	// lazy init decompressor and decompressed-side buffer
 	if !r.inited {
 		var err error
 		r.dec, r.compType, err = r.cr.newDecompressionReader()
 		if err != nil {
 			return nil, 0, fmt.Errorf("init decompression reader: %w", err)
 		}
+		// If stream is clean EOF at start, no decompressor is returned.
+		if r.dec == nil && r.compType == decReaderNone {
+			return nil, 0, nil
+		}
 
-		r.bufReader = bufio.NewReader(r.dec) // prefetch is fine on *decompressed* side now
+		if r.compType == decReaderGZip {
+			r.gz = r.dec.(*gzip.Reader)
+			r.gz.Multistream(false)
+		}
+
+		r.bufReader = bufio.NewReaderSize(r.dec, r.decompBufSize)
 		r.inited = true
 	} else {
 		if r.compType == decReaderGZip {
-			if err := r.dec.(*gzip.Reader).Reset(r.cr); err == io.EOF {
+			// Move to next member (Reset requires the previous one to be fully consumed).
+			if err := r.gz.Reset(r.cr); err == io.EOF {
 				// No more members: clean EOF.
 				return nil, 0, nil
 			} else if err != nil {
 				return nil, 0, fmt.Errorf("gzip reset: %w", err)
 			}
-			r.dec.(*gzip.Reader).Multistream(false)
-			r.bufReader = bufio.NewReader(r.dec) // fresh buffer for new member
+			r.gz.Multistream(false)
+			r.bufReader.Reset(r.dec) // reuse buffer; avoids allocation per member
 		}
 	}
 
 	warcVer, _, err := readFn(r.bufReader, []byte("\r\n"))
-
 	if err != nil {
 		if err == io.EOF && len(warcVer) == 0 {
 			// treat as EOF for safety if member present but empty
@@ -269,8 +319,9 @@ func (r *Reader) ReadRecord(opts ...ReadOpts) (*Record, int64, error) {
 
 	buf := spooledtempfile.NewSpooledTempFile("warc", "", r.threshold, false, -1)
 	if discardContent {
-		if _, err := io.CopyN(io.Discard, r.bufReader, length); err != nil {
-			return nil, 0, fmt.Errorf("copying content (discard): %w", err)
+		// Fast skip: avoids moving bytes to io.Discard through extra copying.
+		if err := discardN(r.bufReader, length); err != nil {
+			return nil, 0, fmt.Errorf("discarding content: %w", err)
 		}
 	} else {
 		if _, err := io.CopyN(buf, r.bufReader, length); err != nil {
@@ -295,6 +346,8 @@ func (r *Reader) ReadRecord(opts ...ReadOpts) (*Record, int64, error) {
 	}
 
 	if r.compType == decReaderGZip {
+		// Ensure we fully consume the current gzip member so Reset() sees the next one.
+		// Must drain via bufReader (not r.dec) to consume any bytes it prefetched.
 		if _, derr := io.Copy(io.Discard, r.bufReader); derr != nil && derr != io.EOF {
 			return r.record, 0, fmt.Errorf("draining gzip member: %w", derr)
 		}
@@ -340,7 +393,9 @@ const (
 // newDecompressionReader will return a new reader transparently doing decompression of GZip, BZip2, XZ, and ZStd.
 // Only GZip is tested and used in production, the others are provided for completeness.
 func (c *countingReader) newDecompressionReader() (io.ReadCloser, decReaderType, error) {
-	magic, err := readExactly(c.r, 6)
+	// Read just 6 bytes w/out allocation; reinsert them with MultiReader so counting is still correct.
+	var magic [6]byte
+	_, err := io.ReadFull(c.r, magic[:])
 	if err == io.EOF || err == io.ErrUnexpectedEOF {
 		// Clean EOF: nothing to read.
 		return nil, decReaderNone, nil
@@ -349,7 +404,7 @@ func (c *countingReader) newDecompressionReader() (io.ReadCloser, decReaderType,
 		return nil, decReaderNone, fmt.Errorf("read magic bytes: %w", err)
 	}
 
-	// rebuild stream to include consumed magic bytes
+	// Rebuild stream to include consumed magic bytes
 	c.r = io.MultiReader(bytes.NewReader(magic[:]), c.r)
 
 	switch {
@@ -406,44 +461,44 @@ func decompressGZip(br *countingReader) (io.ReadCloser, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read GZip stream: %w", err)
 	}
-
 	dr.Multistream(false) // prevent crossing into next member on prefetch
-
 	return dr, nil
 }
 
 // decompressBZip2 decompresses a BZip2 stream from the given input reader r.
 func decompressBzip2(br *countingReader) (io.ReadCloser, error) {
-	// Open BZip2 reader
 	dr := bzip2.NewReader(br)
-
 	return io.NopCloser(dr), nil
 }
 
 // decompressXZ decompresses an XZ stream from the given input reader r.
 func decompressXZ(br *countingReader) (io.ReadCloser, error) {
-	// Open XZ reader
 	dr, err := xz.NewReader(br)
 	if err != nil {
 		return nil, fmt.Errorf("read XZ stream: %w", err)
 	}
-
 	return io.NopCloser(dr), nil
 }
 
 // decompressZStd decompresses a ZStd stream from the given input reader r.
 func decompressZStd(br *countingReader) (io.ReadCloser, error) {
-	// Open ZStd reader
-	dr, err := zstd.NewReader(br, zstd.WithDecoderConcurrency(1))
+	// Keep previous behavior (single-thread) unless overridden by env.
+	concurrency := 1
+	if s := os.Getenv(envZstdDecoderConc); s != "" {
+		if v, err := strconv.Atoi(s); err == nil && v >= 0 {
+			// v==0 lets zstd pick an automatic value; v>=1 sets exact goroutines.
+			concurrency = v
+		}
+	}
+	opts := []zstd.DOption{zstd.WithDecoderConcurrency(concurrency)}
+	dr, err := zstd.NewReader(br, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("read ZStd stream: %w", err)
 	}
-
 	return dr.IOReadCloser(), nil
 }
 
-// decompressZStdCustomDict decompresses a ZStd stream with a prefixed custom dictionary from the given input
-// reader r.
+// decompressZStdCustomDict decompresses a ZStd stream with a prefixed custom dictionary from the given input reader r.
 func decompressZStdCustomDict(br *countingReader) (io.ReadCloser, error) {
 	// Read header
 	var header [8]byte
@@ -469,7 +524,6 @@ func decompressZStdCustomDict(br *countingReader) (io.ReadCloser, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read ZStd compressed custom dictionary: %w", err)
 	}
-
 	defer dictr.Close()
 
 	dict, err := io.ReadAll(dictr)
@@ -484,10 +538,15 @@ func decompressZStdCustomDict(br *countingReader) (io.ReadCloser, error) {
 	}
 
 	// Open ZStd reader, with the given dictionary
-	dr, err := zstd.NewReader(br, zstd.WithDecoderDicts(dict), zstd.WithDecoderConcurrency(1))
+	concurrency := 1
+	if s := os.Getenv(envZstdDecoderConc); s != "" {
+		if v, err := strconv.Atoi(s); err == nil && v >= 0 {
+			concurrency = v
+		}
+	}
+	dr, err := zstd.NewReader(br, zstd.WithDecoderDicts(dict), zstd.WithDecoderConcurrency(concurrency))
 	if err != nil {
 		return nil, fmt.Errorf("create ZStd reader: %w", err)
 	}
-
 	return dr.IOReadCloser(), nil
 }
