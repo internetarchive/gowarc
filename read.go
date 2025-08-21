@@ -239,6 +239,7 @@ func (r *Reader) ReadRecord(opts ...ReadOpts) (*Record, int64, error) {
 	}
 
 	warcVer, _, err := readFn(r.bufReader, []byte("\r\n"))
+
 	if err != nil {
 		if err == io.EOF && len(warcVer) == 0 {
 			// treat as EOF for safety if member present but empty
@@ -490,3 +491,12 @@ func decompressZStdCustomDict(br *countingReader) (io.ReadCloser, error) {
 
 	return dr.IOReadCloser(), nil
 }
+
+// ReadOpts are options for ReadRecord
+type ReadOpts int
+
+const (
+	// ReadOptsNoContentOutput means that the content of the record should not be returned.
+	// This is useful for reading only the headers or metadata of the record.
+	ReadOptsNoContentOutput ReadOpts = iota
+)
