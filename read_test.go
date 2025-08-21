@@ -3,10 +3,12 @@ package warc
 import (
 	"bufio"
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -329,6 +331,66 @@ func testFileEarlyEOF(t *testing.T, path string) {
 	t.Fatalf("expected early EOF record boundary, got none")
 }
 
+type testBlob struct {
+	Offset int64 `json:"offset"`
+	Length int64 `json:"length"`
+}
+
+func testFileBlobCorrectness(t *testing.T, path string) {
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("failed to open %q: %v", path, err)
+	}
+	defer file.Close()
+
+	// run testdata/gzip_blob_finder.py
+	cmd := exec.Command("python3", "testdata/gzip_blob_finder.py", path)
+	output, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("failed to run testdata/gzip_blob_finder.py: %v", err)
+	}
+
+	var expectedBlobs []testBlob
+	err = json.Unmarshal(output, &expectedBlobs)
+	if err != nil {
+		t.Fatalf("failed to unmarshal output from testdata/gzip_blob_finder.py: %v", err)
+	}
+
+	var foundBlobs []testBlob
+	reader, err := NewReader(file)
+	if err != nil {
+		t.Fatalf("warc.NewReader failed for %q: %v", path, err)
+	}
+
+	var offset int64
+	for {
+		record, size, err := reader.ReadRecord()
+		if size == 0 {
+			break
+		}
+
+		if err != nil {
+			t.Fatalf("failed to read all record content: %v", err)
+		}
+
+		foundBlobs = append(foundBlobs, testBlob{Offset: offset, Length: size})
+		err = record.Content.Close()
+		if err != nil {
+			t.Fatalf("failed to close record content: %v", err)
+		}
+		offset += size
+	}
+
+	if len(foundBlobs) != len(expectedBlobs) {
+		t.Fatalf("expected %d blobs, got %d", len(expectedBlobs), len(foundBlobs))
+	}
+	for i, expected := range expectedBlobs {
+		if expected.Offset != foundBlobs[i].Offset || expected.Length != foundBlobs[i].Length {
+			t.Fatalf("expected blob %d to be at offset %d with length %d, got offset %d with length %d", i, expected.Offset, expected.Length, foundBlobs[i].Offset, foundBlobs[i].Length)
+		}
+	}
+}
+
 func TestReader(t *testing.T) {
 	var paths = []string{
 		"testdata/test.warc.gz",
@@ -337,6 +399,7 @@ func TestReader(t *testing.T) {
 		testFileHash(t, path)
 		testFileScan(t, path)
 		// testFileEarlyEOF(t, path)
+		testFileBlobCorrectness(t, path)
 	}
 }
 
