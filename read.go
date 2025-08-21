@@ -491,12 +491,3 @@ func decompressZStdCustomDict(br *countingReader) (io.ReadCloser, error) {
 
 	return dr.IOReadCloser(), nil
 }
-
-// ReadOpts are options for ReadRecord
-type ReadOpts int
-
-const (
-	// ReadOptsNoContentOutput means that the content of the record should not be returned.
-	// This is useful for reading only the headers or metadata of the record.
-	ReadOptsNoContentOutput ReadOpts = iota
-)

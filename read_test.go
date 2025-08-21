@@ -418,39 +418,6 @@ func TestReaderSize(t *testing.T) {
 	}
 }
 
-func TestReaderNoContentOpt(t *testing.T) {
-	var paths = []string{
-		"testdata/test.warc.gz",
-	}
-	for _, path := range paths {
-		file, err := os.Open(path)
-		if err != nil {
-			t.Fatalf("failed to open %q: %v", path, err)
-		}
-		defer file.Close()
-
-		reader, err := NewReader(file)
-		if err != nil {
-			t.Fatalf("warc.NewReader failed for %q: %v", path, err)
-		}
-
-		for {
-			record, eol, err := reader.ReadRecord(ReadOptsNoContentOutput)
-			if eol {
-				break
-			}
-			if err != nil {
-				t.Fatalf("failed to read all record content: %v", err)
-				break
-			}
-
-			if record.Content.Len() > 0 {
-				t.Fatal("expected no content, got content")
-			}
-		}
-	}
-}
-
 func BenchmarkBasicRead(b *testing.B) {
 	// default test warc location
 	path := "testdata/test.warc.gz"
