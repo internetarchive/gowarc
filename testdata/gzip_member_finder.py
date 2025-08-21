@@ -6,13 +6,14 @@ import zlib
 
 MAGIC = b"\x1f\x8b\x08"  # gzip magic + deflate method
 
-def find_gzip_blobs(path):
+
+def find_gzip_members(path):
     """
     Return [(offset, length), ...] for each gzip member embedded in the file.
     Complexity is ~O(n): we jump between headers and let zlib tell us where
     each member ends. CRC/ISIZE are validated by zlib automatically.
     """
-    blobs = []
+    members = []
 
     with open(path, "rb") as f:
         try:
@@ -50,7 +51,7 @@ def find_gzip_blobs(path):
 
                 consumed = len(tail) - len(d.unused_data)
                 if consumed >= 18:  # minimal gzip member size
-                    blobs.append((j, consumed))
+                    members.append((j, consumed))
                     i = j + consumed   # jump past this member
                 else:
                     i = j + 1
@@ -60,7 +61,7 @@ def find_gzip_blobs(path):
         if is_mmap:
             buf.close()
 
-    return blobs
+    return members
 
 
 def main():
@@ -68,8 +69,8 @@ def main():
         print("Usage: python gzip_blob_finder.py <filename>", file=sys.stderr)
         sys.exit(1)
     path = sys.argv[1]
-    blobs = find_gzip_blobs(path)
-    print(json.dumps([{"offset": off, "length": ln} for off, ln in blobs]))
+    members = find_gzip_members(path)
+    print(json.dumps([{"offset": off, "length": ln} for off, ln in members]))
 
 
 if __name__ == "__main__":
