@@ -19,7 +19,6 @@ import (
 
 // Reader stores the bufio.Reader and gzip.Reader for a WARC file
 type Reader struct {
-	record    *Record
 	threshold int
 
 	src       io.ReadCloser   // raw concatenated .gz input - wrapped in countingReader
