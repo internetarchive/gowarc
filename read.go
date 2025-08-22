@@ -263,7 +263,7 @@ func (r *Reader) ReadRecord(opts ...ReadOpts) (*Record, error) {
 		}
 		// If stream is clean EOF at start, no decompressor is returned.
 		if r.dec == nil && r.compType == decReaderNone {
-			return nil, 0, nil
+			return nil, io.EOF // clean EOF
 		}
 
 		if r.compType == decReaderGZip {
@@ -326,7 +326,7 @@ func (r *Reader) ReadRecord(opts ...ReadOpts) (*Record, error) {
 	if discardContent {
 		// Fast skip: avoids moving bytes to io.Discard through extra copying.
 		if err := discardN(r.bufReader, length); err != nil {
-			return nil, 0, fmt.Errorf("discarding content: %w", err)
+			return nil, fmt.Errorf("discarding content: %w", err)
 		}
 	} else {
 		if _, err := io.CopyN(buf, r.bufReader, length); err != nil {
