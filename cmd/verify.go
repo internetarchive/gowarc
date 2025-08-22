@@ -203,7 +203,7 @@ func verifyPayloadDigest(record *warc.Record, filepath string) (errorsCount int,
 		return errorsCount, valid
 	}
 
-	if strings.HasPrefix(resp.Header.Get("WARC-Payload-Digest"), "sha1") {
+	if strings.HasPrefix(record.Header.Get("WARC-Payload-Digest"), "sha1") {
 		payloadDigest, err := warc.GetDigest(resp.Body, warc.SHA1)
 		if err != nil {
 			logger.Error("failed to calculate payload digest", "file", filepath, "recordID", record.Header.Get("WARC-Record-ID"), "err", err.Error())
@@ -212,13 +212,13 @@ func verifyPayloadDigest(record *warc.Record, filepath string) (errorsCount int,
 			return errorsCount, valid
 		}
 
-		if payloadDigest != resp.Header.Get("WARC-Payload-Digest") {
-			logger.Error("payload digests do not match", "file", filepath, "recordID", record.Header.Get("WARC-Record-ID"), "expected", resp.Header.Get("WARC-Payload-Digest"), "got", payloadDigest)
+		if payloadDigest != record.Header.Get("WARC-Payload-Digest") {
+			logger.Error("payload digests do not match", "file", filepath, "recordID", record.Header.Get("WARC-Record-ID"), "expected", record.Header.Get("WARC-Payload-Digest"), "got", payloadDigest)
 			valid = false
 			errorsCount++
 			return errorsCount, valid
 		}
-	} else if strings.HasPrefix(resp.Header.Get("WARC-Payload-Digest"), "sha256") {
+	} else if strings.HasPrefix(record.Header.Get("WARC-Payload-Digest"), "sha256") {
 		payloadDigest, err := warc.GetDigest(resp.Body, warc.SHA256Base16)
 		if err != nil {
 			logger.Error("failed to calculate payload digest", "file", filepath, "recordID", record.Header.Get("WARC-Record-ID"), "err", err.Error())
@@ -227,13 +227,13 @@ func verifyPayloadDigest(record *warc.Record, filepath string) (errorsCount int,
 			return errorsCount, valid
 		}
 
-		if payloadDigest != resp.Header.Get("WARC-Payload-Digest") {
-			logger.Error("payload digests do not match", "file", filepath, "recordID", record.Header.Get("WARC-Record-ID"), "expected", resp.Header.Get("WARC-Payload-Digest"), "got", payloadDigest)
+		if payloadDigest != record.Header.Get("WARC-Payload-Digest") {
+			logger.Error("payload digests do not match", "file", filepath, "recordID", record.Header.Get("WARC-Record-ID"), "expected", record.Header.Get("WARC-Payload-Digest"), "got", payloadDigest)
 			valid = false
 			errorsCount++
 			return errorsCount, valid
 		}
-	} else if strings.HasPrefix(resp.Header.Get("WARC-Payload-Digest"), "blake3") {
+	} else if strings.HasPrefix(record.Header.Get("WARC-Payload-Digest"), "blake3") {
 		payloadDigest, err := warc.GetDigest(resp.Body, warc.BLAKE3)
 		if err != nil {
 			logger.Error("failed to calculate payload digest", "file", filepath, "recordID", record.Header.Get("WARC-Record-ID"), "err", err.Error())
@@ -242,8 +242,8 @@ func verifyPayloadDigest(record *warc.Record, filepath string) (errorsCount int,
 			return errorsCount, valid
 		}
 
-		if payloadDigest != resp.Header.Get("WARC-Payload-Digest") {
-			logger.Error("payload digests do not match", "file", filepath, "recordID", record.Header.Get("WARC-Record-ID"), "expected", resp.Header.Get("WARC-Payload-Digest"), "got", payloadDigest)
+		if payloadDigest != record.Header.Get("WARC-Payload-Digest") {
+			logger.Error("payload digests do not match", "file", filepath, "recordID", record.Header.Get("WARC-Record-ID"), "expected", record.Header.Get("WARC-Payload-Digest"), "got", payloadDigest)
 			valid = false
 			errorsCount++
 			return errorsCount, valid
