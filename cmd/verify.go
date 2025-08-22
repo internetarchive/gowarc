@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -92,12 +93,12 @@ func verify(cmd *cobra.Command, files []string) {
 			defer recordReaderWg.Done()
 			defer close(recordChan)
 			for {
-				record, size, err := reader.ReadRecord()
-				if size == 0 {
-					allRecordsRead = true
-					break
-				}
+				record, err := reader.ReadRecord()
 				if err != nil {
+					if err == io.EOF {
+						allRecordsRead = true
+						break
+					}
 					if record == nil {
 						logger.Error("failed to read record", "err", err.Error(), "file", filepath)
 					} else {

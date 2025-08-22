@@ -29,11 +29,11 @@ func testFileHash(t *testing.T, path string) {
 	}
 
 	for {
-		record, size, err := reader.ReadRecord()
-		if size == 0 {
-			break
-		}
+		record, err := reader.ReadRecord()
 		if err != nil {
+			if err == io.EOF {
+				break
+			}
 			t.Fatalf("failed to read all record content: %v", err)
 			break
 		}
@@ -67,14 +67,15 @@ func testFileScan(t *testing.T, path string) {
 
 	total := 0
 	for {
-		_, size, err := reader.ReadRecord()
-		if size == 0 {
-			break
-		}
+		r, err := reader.ReadRecord()
 		if err != nil {
+			if err == io.EOF {
+				break
+			}
 			t.Fatalf("failed to read all record content: %v", err)
 			break
 		}
+		r.Content.Close()
 		total++
 	}
 
@@ -103,26 +104,21 @@ func testFileSingleHashCheck(t *testing.T, path string, hash string, expectedCon
 	totalRead := 0
 
 	for {
-		record, size, err := reader.ReadRecord()
-		if size == 0 {
-			if expectedTotal == -1 {
-				// This is expected for multiple file WARCs as we need to count the total count outside of this function.
-				return totalRead
-			}
-
-			if totalRead == expectedTotal {
-				// We've read the expected amount and reached the end of the WARC file. Time to break out.
-				break
-			} else {
-				t.Fatalf("unexpected number of records read, read: %d but expected: %d", totalRead, expectedTotal)
-				return -1
-			}
-		}
-
+		record, err := reader.ReadRecord()
 		if err != nil {
-			err = record.Content.Close()
-			if err != nil {
-				t.Fatalf("failed to close record content: %v", err)
+			if err == io.EOF {
+				if expectedTotal == -1 {
+					// This is expected for multiple file WARCs as we need to count the total count outside of this function.
+					return totalRead
+				}
+
+				if totalRead == expectedTotal {
+					// We've read the expected amount and reached the end of the WARC file. Time to break out.
+					break
+				} else {
+					t.Fatalf("unexpected number of records read, read: %d but expected: %d", totalRead, expectedTotal)
+					return -1
+				}
 			}
 			t.Fatalf("warc.ReadRecord failed: %v", err)
 			break
@@ -220,27 +216,19 @@ func testFileRevisitVailidity(t *testing.T, path string, originalTime string, or
 	}
 
 	for {
-		record, size, err := reader.ReadRecord()
-		if size == 0 {
-			if revisitRecordsFound {
-				return
-			}
-			if shouldBeEmpty {
-				t.Logf("No revisit records found. That's expected for this test.")
-				break
-			}
-
-			t.Fatalf("No revisit records found.")
-			break
-		}
-
+		record, err := reader.ReadRecord()
 		if err != nil {
-			err = record.Content.Close()
-			if err != nil {
-				t.Fatalf("failed to close record content: %v", err)
+			if err == io.EOF {
+				if revisitRecordsFound {
+					return
+				}
+				if shouldBeEmpty {
+					t.Logf("No revisit records found. That's expected for this test.")
+					break
+				}
 			}
 			t.Fatalf("warc.ReadRecord failed: %v", err)
-			break
+			return
 		}
 
 		if record.Header.Get("WARC-Type") != "response" && record.Header.Get("WARC-Type") != "revisit" {
@@ -299,8 +287,11 @@ func testFileEarlyEOF(t *testing.T, path string) {
 	if err != nil {
 		t.Fatalf("warc.NewReader failed for %q: %v", path, err)
 	}
+	reader.cr = &countingReader{r: reader.src}
+
 	// read the file into memory
-	data, err := io.ReadAll(reader.bufReader)
+	reader.dec, reader.compType, err = reader.cr.newDecompressionReader()
+	data, err := io.ReadAll(reader.dec)
 	if err != nil {
 		t.Fatalf("failed to read %q: %v", path, err)
 	}
@@ -316,19 +307,21 @@ func testFileEarlyEOF(t *testing.T, path string) {
 	}
 	// read the records
 	for {
-		_, size, err := reader.ReadRecord()
-		if size == 0 {
-			break
-		}
+		record, err := reader.ReadRecord()
 		if err != nil {
-			if strings.Contains(err.Error(), "early EOF record boundary") {
+			if err == io.EOF {
+				break
+			}
+
+			if strings.Contains(err.Error(), "reading record boundary: EOF") {
 				return // ok
 			} else {
-				t.Fatalf("expected early EOF record boundary, got %v", err)
+				t.Fatalf("expected `reading record boundary: EOF`, got %v", err)
 			}
 		}
+		record.Content.Close()
 	}
-	t.Fatalf("expected early EOF record boundary, got none")
+	t.Fatalf("expected `reading record boundary: EOF`, got none")
 }
 
 type testMember struct {
@@ -363,21 +356,20 @@ func testFileGZipMemberCorrectness(t *testing.T, path string) {
 
 	var offset int64
 	for {
-		record, size, err := reader.ReadRecord()
-		if size == 0 {
-			break
-		}
-
+		record, err := reader.ReadRecord()
 		if err != nil {
+			if err == io.EOF {
+				break
+			}
 			t.Fatalf("failed to read all record content: %v", err)
 		}
 
-		foundMembers = append(foundMembers, testMember{Offset: offset, Length: size})
+		foundMembers = append(foundMembers, testMember{Offset: offset, Length: record.Size})
 		err = record.Content.Close()
 		if err != nil {
 			t.Fatalf("failed to close record content: %v", err)
 		}
-		offset += size
+		offset += record.Size
 	}
 
 	if len(foundMembers) != len(expectedMembers) {
@@ -397,7 +389,7 @@ func TestReader(t *testing.T) {
 	for _, path := range paths {
 		testFileHash(t, path)
 		testFileScan(t, path)
-		// testFileEarlyEOF(t, path)
+		testFileEarlyEOF(t, path)
 		testFileGZipMemberCorrectness(t, path)
 	}
 }
@@ -419,8 +411,8 @@ func TestReaderNoContentOpt(t *testing.T) {
 		}
 
 		for {
-			record, size, err := reader.ReadRecord(ReadOptsNoContentOutput)
-			if size == 0 {
+			record, err := reader.ReadRecord(ReadOptsNoContentOutput)
+			if err == io.EOF {
 				break
 			}
 			if err != nil {
@@ -464,14 +456,14 @@ func TestReaderSize(t *testing.T) {
 
 		var totalSize int64
 		for {
-			_, size, err := reader.ReadRecord()
+			record, err := reader.ReadRecord()
 			if err != nil {
+				if err == io.EOF {
+					break
+				}
 				t.Fatalf("failed while reading record content: %v", err)
 			}
-			if size == 0 { // clean EOF
-				break
-			}
-			totalSize += size
+			totalSize += record.Size
 		}
 
 		if totalSize != expectedSize {
@@ -499,11 +491,11 @@ func BenchmarkBasicRead(b *testing.B) {
 		}
 
 		for {
-			record, size, err := reader.ReadRecord()
-			if size == 0 {
-				break
-			}
+			record, err := reader.ReadRecord()
 			if err != nil {
+				if err == io.EOF {
+					break
+				}
 				b.Fatalf("failed to read all record content: %v", err)
 				break
 			}
