@@ -160,7 +160,7 @@ func testFileSingleHashCheck(t *testing.T, path string, hash string, expectedCon
 			defer resp.Body.Close()
 			defer record.Content.Seek(0, 0)
 
-			calculatedRecordHash, err := GetDigest(record.Content, SHA1)
+			calculatedRecordHash, err := GetDigest(resp.Body, SHA1)
 			if err != nil {
 				t.Fatalf("failed to get digest: %v", err)
 			}
