@@ -44,7 +44,7 @@ func (c *countingReader) Read(p []byte) (int, error) {
 	c.n += int64(n)
 	return n, err
 }
-func (c *countingReader) N() int64 { return c.n }
+func (c *countingReader) Tell() int64 { return c.n }
 
 // ReadByte reads a single byte from the underlying reader and counts it. To satisfy the io.ByteReader interface.
 func (c *countingReader) ReadByte() (byte, error) {
