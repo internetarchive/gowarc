@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/internetarchive/gowarc"
+	warc "github.com/internetarchive/gowarc"
 	"github.com/spf13/cobra"
 )
 
@@ -21,7 +21,7 @@ func processVerifyRecord(record *warc.Record, filepath string, results chan<- re
 	var res result
 	res.blockDigestErrorsCount, res.blockDigestValid = verifyBlockDigest(record, filepath)
 	res.payloadDigestErrorsCount, res.payloadDigestValid = verifyPayloadDigest(record, filepath)
-	res.warcVersionValid = verifyWarcVersion(record, filepath)
+	res.warcVersionValid = verifyWARCVersion(record, filepath)
 	results <- res
 }
 
@@ -212,9 +212,9 @@ func verifyPayloadDigest(record *warc.Record, filepath string) (errorsCount int,
 	}
 
 	if payloadDigestSplitted[0] == "sha1" {
-		payloadDigest := warc.GetSHA1(resp.Body)
-		if payloadDigest == "ERROR" {
-			logger.Error("failed to calculate payload digest", "file", filepath, "recordID", record.Header.Get("WARC-Record-ID"))
+		payloadDigest, err := warc.GetDigest(resp.Body, warc.SHA1)
+		if err != nil {
+			logger.Error("failed to calculate payload digest", "file", filepath, "recordID", record.Header.Get("WARC-Record-ID"), "err", err.Error())
 			valid = false
 			errorsCount++
 			return errorsCount, valid
@@ -227,9 +227,9 @@ func verifyPayloadDigest(record *warc.Record, filepath string) (errorsCount int,
 			return errorsCount, valid
 		}
 	} else if payloadDigestSplitted[0] == "sha256" {
-		payloadDigest := warc.GetSHA256Base16(resp.Body)
-		if payloadDigest == "ERROR" {
-			logger.Error("failed to calculate payload digest", "file", filepath, "recordID", record.Header.Get("WARC-Record-ID"))
+		payloadDigest, err := warc.GetDigest(resp.Body, warc.SHA256Base16)
+		if err != nil {
+			logger.Error("failed to calculate payload digest", "file", filepath, "recordID", record.Header.Get("WARC-Record-ID"), "err", err.Error())
 			valid = false
 			errorsCount++
 			return errorsCount, valid
@@ -241,8 +241,22 @@ func verifyPayloadDigest(record *warc.Record, filepath string) (errorsCount int,
 			errorsCount++
 			return errorsCount, valid
 		}
+	} else if payloadDigestSplitted[0] == "blake3" {
+		payloadDigest, err := warc.GetDigest(resp.Body, warc.BLAKE3)
+		if err != nil {
+			logger.Error("failed to calculate payload digest", "file", filepath, "recordID", record.Header.Get("WARC-Record-ID"), "err", err.Error())
+			valid = false
+			errorsCount++
+			return errorsCount, valid
+		}
+		if payloadDigest != payloadDigestSplitted[1] {
+			logger.Error("payload digests do not match", "file", filepath, "recordID", record.Header.Get("WARC-Record-ID"), "expected", payloadDigestSplitted[1], "got", payloadDigest)
+			valid = false
+			errorsCount++
+			return errorsCount, valid
+		}
 	} else {
-		logger.Error("WARC-Payload-Digest is not SHA1 or SHA256", "file", filepath, "recordID", record.Header.Get("WARC-Record-ID"))
+		logger.Error("unsupported payload digest algorithm", "file", filepath, "recordID", record.Header.Get("WARC-Record-ID"))
 		valid = false
 		errorsCount++
 		return errorsCount, valid
@@ -254,49 +268,58 @@ func verifyPayloadDigest(record *warc.Record, filepath string) (errorsCount int,
 func verifyBlockDigest(record *warc.Record, filepath string) (errorsCount int, valid bool) {
 	valid = true
 
-	// Verify that the WARC-Block-Digest is sha1
-	if record.Header.Get("WARC-Block-Digest") == "" {
+	// Verify that the WARC-Block-Digest is present
+	blockDigest := record.Header.Get("WARC-Block-Digest")
+	if blockDigest == "" {
 		logger.Error("WARC-Block-Digest is missing", "file", filepath, "recordID", record.Header.Get("WARC-Record-ID"))
-		valid = false
-		errorsCount++
-		return errorsCount, valid
+		return 1, false
 	}
 
-	blockDigestSplitted := strings.Split(record.Header.Get("WARC-Block-Digest"), ":")
+	// Split and validate the digest format
+	blockDigestSplitted := strings.Split(blockDigest, ":")
 	if len(blockDigestSplitted) != 2 {
 		logger.Error("malformed WARC-Block-Digest", "file", filepath, "recordID", record.Header.Get("WARC-Record-ID"))
-		valid = false
-		errorsCount++
-		return errorsCount, valid
+		return 1, false
 	}
 
-	defer record.Content.Seek(0, 0)
+	algorithm, expectedDigest := blockDigestSplitted[0], blockDigestSplitted[1]
 
-	if blockDigestSplitted[0] == "sha1" {
-		expectedPayloadDigest := warc.GetSHA1(record.Content)
-		if expectedPayloadDigest != blockDigestSplitted[1] {
-			logger.Error("WARC-Block-Digest mismatch", "file", filepath, "recordID", record.Header.Get("WARC-Record-ID"), "expected", expectedPayloadDigest, "got", blockDigestSplitted[1])
-			valid = false
-			errorsCount++
-		}
-	} else if blockDigestSplitted[0] == "sha256" {
-		expectedPayloadDigest := warc.GetSHA256Base16(record.Content)
-		if expectedPayloadDigest != blockDigestSplitted[1] {
-			logger.Error("WARC-Block-Digest mismatch", "file", filepath, "recordID", record.Header.Get("WARC-Record-ID"), "expected", expectedPayloadDigest, "got", blockDigestSplitted[1])
-			valid = false
-			errorsCount++
-		}
-	} else {
-		logger.Error("WARC-Block-Digest is not sha1 or sha256", "file", filepath, "recordID", record.Header.Get("WARC-Record-ID"))
-		valid = false
-		errorsCount++
-		return errorsCount, valid
+	// Map of supported algorithms to their corresponding digest functions
+	digestFunctions := map[string]warc.DigestAlgorithm{
+		"sha1":   warc.SHA1,
+		"sha256": warc.SHA256Base16,
+		"blake3": warc.BLAKE3,
 	}
 
-	return errorsCount, valid
+	// Check if the algorithm is supported
+	digestFunc, supported := digestFunctions[algorithm]
+	if !supported {
+		logger.Error("WARC-Block-Digest uses unsupported algorithm", "file", filepath, "recordID", record.Header.Get("WARC-Record-ID"), "algorithm", algorithm)
+		return 1, false
+	}
+
+	// Calculate and verify the digest
+	return verifyDigest(record, filepath, digestFunc, expectedDigest)
 }
 
-func verifyWarcVersion(record *warc.Record, filepath string) (valid bool) {
+func verifyDigest(record *warc.Record, filepath string, algorithm warc.DigestAlgorithm, expectedDigest string) (errorsCount int, valid bool) {
+	defer record.Content.Seek(0, 0)
+
+	calculatedDigest, err := warc.GetDigest(record.Content, algorithm)
+	if err != nil {
+		logger.Error("failed to calculate block digest", "file", filepath, "recordID", record.Header.Get("WARC-Record-ID"), "err", err.Error())
+		return 1, false
+	}
+
+	if calculatedDigest != expectedDigest {
+		logger.Error("WARC-Block-Digest mismatch", "file", filepath, "recordID", record.Header.Get("WARC-Record-ID"), "expected", calculatedDigest, "got", expectedDigest)
+		return 1, false
+	}
+
+	return 0, true
+}
+
+func verifyWARCVersion(record *warc.Record, filepath string) (valid bool) {
 	valid = true
 	if record.Version != "WARC/1.0" && record.Version != "WARC/1.1" {
 		logger.Error("invalid WARC version", "file", filepath, "recordID", record.Header.Get("WARC-Record)"))

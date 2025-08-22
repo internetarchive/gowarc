@@ -35,7 +35,7 @@ type customDialer struct {
 	disableIPv6 bool
 }
 
-var emptyPayloadDigest = "3I42H3S6NNFQ2MSVX7XZKYAYSCX5QBYJ"
+var emptyPayloadDigest = "sha1:3I42H3S6NNFQ2MSVX7XZKYAYSCX5QBYJ"
 
 func newCustomDialer(httpClient *CustomHTTPClient, proxyURL string, DialTimeout, DNSRecordsTTL, DNSResolutionTimeout time.Duration, DNSCacheSize int, DNSServers []string, disableIPv4, disableIPv6 bool) (d *customDialer, err error) {
 	d = new(customDialer)
@@ -438,7 +438,16 @@ func (d *customDialer) writeWARCFromConnection(ctx context.Context, reqPipe, res
 				return
 			}
 
-			r.Header.Set("WARC-Block-Digest", "sha1:"+GetSHA1(r.Content))
+			digest, err := GetDigest(r.Content, d.client.digestAlgorithm)
+			if err != nil {
+				d.client.ErrChan <- &Error{
+					Err:  err,
+					Func: "writeWARCFromConnection",
+				}
+				return
+			}
+
+			r.Header.Set("WARC-Block-Digest", digest)
 			r.Header.Set("Content-Length", strconv.Itoa(getContentLength(r.Content)))
 
 			if d.client.dedupeOptions.LocalDedupe {
@@ -519,18 +528,17 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 	}
 
 	// Calculate the WARC-Payload-Digest
-	payloadDigest := GetSHA1(resp.Body)
-	if strings.HasPrefix(payloadDigest, "ERROR: ") {
-		// This should _never_ happen.
-		return fmt.Errorf("readResponse: SHA1 ran into an unrecoverable error: %s url: %s", payloadDigest, warcTargetURI)
+	payloadDigest, err := GetDigest(resp.Body, d.client.digestAlgorithm)
+	if err != nil {
+		return fmt.Errorf("readResponse: payload digest calculation failed: %s", err.Error())
 	}
 
 	err = resp.Body.Close()
 	if err != nil {
-		return fmt.Errorf("readResponse: closing body after SHA1 calculation failed: %s", err.Error())
+		return fmt.Errorf("readResponse: closing body after digest calculation failed: %s", err.Error())
 	}
 
-	responseRecord.Header.Set("WARC-Payload-Digest", "sha1:"+payloadDigest)
+	responseRecord.Header.Set("WARC-Payload-Digest", payloadDigest)
 
 	// Write revisit record if local, CDX, or Doppelganger dedupe is activated and finds match.
 	var revisit = revisitRecord{}
