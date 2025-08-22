@@ -268,21 +268,14 @@ func verifyBlockDigest(record *warc.Record, filepath string) (errorsCount int, v
 		return 1, false
 	}
 
-	// Split and validate the digest format
-	blockDigestSplitted := strings.Split(blockDigest, ":")
-	if len(blockDigestSplitted) != 2 {
-		logger.Error("malformed WARC-Block-Digest", "file", filepath, "recordID", record.Header.Get("WARC-Record-ID"))
-		return 1, false
-	}
-
-	algorithm, expectedDigest := blockDigestSplitted[0], blockDigestSplitted[1]
-
 	// Map of supported algorithms to their corresponding digest functions
 	digestFunctions := map[string]warc.DigestAlgorithm{
 		"sha1":   warc.SHA1,
 		"sha256": warc.SHA256Base16,
 		"blake3": warc.BLAKE3,
 	}
+
+	algorithm := strings.SplitN(blockDigest, ":", 2)[0]
 
 	// Check if the algorithm is supported
 	digestFunc, supported := digestFunctions[algorithm]
@@ -292,7 +285,7 @@ func verifyBlockDigest(record *warc.Record, filepath string) (errorsCount int, v
 	}
 
 	// Calculate and verify the digest
-	return verifyDigest(record, filepath, digestFunc, expectedDigest)
+	return verifyDigest(record, filepath, digestFunc, blockDigest)
 }
 
 func verifyDigest(record *warc.Record, filepath string, algorithm warc.DigestAlgorithm, expectedDigest string) (errorsCount int, valid bool) {

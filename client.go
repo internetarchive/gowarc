@@ -126,10 +126,8 @@ func NewWARCWritingHTTPClient(HTTPClientSettings HTTPClientSettings) (httpClient
 	}
 
 	// Set block and payload digest algorithm (it's important to set that before we configure the WARC writer)
-	if HTTPClientSettings.digestAlgorithm != 0 {
-		httpClient.digestAlgorithm = HTTPClientSettings.digestAlgorithm
-		HTTPClientSettings.RotatorSettings.DigestAlgorithm = HTTPClientSettings.digestAlgorithm
-	}
+	httpClient.digestAlgorithm = HTTPClientSettings.digestAlgorithm
+	HTTPClientSettings.RotatorSettings.DigestAlgorithm = HTTPClientSettings.digestAlgorithm
 
 	// Toggle deduplication options and create map for deduplication records.
 	httpClient.dedupeOptions = HTTPClientSettings.DedupeOptions
