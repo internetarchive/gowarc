@@ -28,7 +28,6 @@ const (
 
 // Reader stores the bufio.Reader and gzip.Reader for a WARC file
 type Reader struct {
-	record    *Record
 	threshold int
 
 	src       io.ReadCloser   // raw concatenated .gz input - wrapped in countingReader
@@ -58,7 +57,7 @@ func (c *countingReader) Read(p []byte) (int, error) {
 	c.n += int64(n)
 	return n, err
 }
-func (c *countingReader) N() int64 { return c.n }
+func (c *countingReader) Tell() int64 { return c.n }
 
 // ReadByte reads a single byte and counts it. No allocation; tries fast-path if the
 // underlying reader already implements io.ByteReader.
@@ -232,10 +231,9 @@ func discardN(r *bufio.Reader, n int64) error {
 // ReadRecord reads the next record from the opened WARC file.
 //
 // Returns:
-//   - *Record: nil when at clean EOF (no more records).
-//   - int64:   COMPRESSED size of the record (gzip member): header + deflate data + trailer.
-//   - error:   any parsing/IO error encountered (nil for clean EOF).
-func (r *Reader) ReadRecord(opts ...ReadOpts) (*Record, int64, error) {
+//   - *Record: Record guaranteed to be non-nil if no errors occurred.
+//   - error:   any parsing/IO error encountered (io.EOF for clean EOF).
+func (r *Reader) ReadRecord(opts ...ReadOpts) (*Record, error) {
 	var (
 		discardContent bool
 		readFn         = readUntilDelimChunked // generic; uses ReadSlice for speed
@@ -254,14 +252,14 @@ func (r *Reader) ReadRecord(opts ...ReadOpts) (*Record, int64, error) {
 		r.cr = &countingReader{r: r.src}
 	}
 
-	startCompressed := r.cr.N()
+	offset := r.cr.Tell()
 
 	// lazy init decompressor and decompressed-side buffer
 	if !r.inited {
 		var err error
 		r.dec, r.compType, err = r.cr.newDecompressionReader()
 		if err != nil {
-			return nil, 0, fmt.Errorf("init decompression reader: %w", err)
+			return nil, fmt.Errorf("init decompression reader: %w", err)
 		}
 		// If stream is clean EOF at start, no decompressor is returned.
 		if r.dec == nil && r.compType == decReaderNone {
@@ -280,9 +278,9 @@ func (r *Reader) ReadRecord(opts ...ReadOpts) (*Record, int64, error) {
 			// Move to next member (Reset requires the previous one to be fully consumed).
 			if err := r.gz.Reset(r.cr); err == io.EOF {
 				// No more members: clean EOF.
-				return nil, 0, nil
+				return nil, io.EOF
 			} else if err != nil {
-				return nil, 0, fmt.Errorf("gzip reset: %w", err)
+				return nil, fmt.Errorf("gzip reset: %w", err)
 			}
 			r.gz.Multistream(false)
 			r.bufReader.Reset(r.dec) // reuse buffer; avoids allocation per member
@@ -293,16 +291,16 @@ func (r *Reader) ReadRecord(opts ...ReadOpts) (*Record, int64, error) {
 	if err != nil {
 		if err == io.EOF && len(warcVer) == 0 {
 			// treat as EOF for safety if member present but empty
-			return nil, 0, nil
+			return nil, io.EOF
 		}
-		return nil, 0, fmt.Errorf("reading WARC version: %w", err)
+		return nil, fmt.Errorf("reading WARC version: %w", err)
 	}
 
 	header := NewHeader()
 	for {
 		line, _, err := readFn(r.bufReader, []byte("\r\n"))
 		if err != nil {
-			return nil, 0, fmt.Errorf("reading header: %w", err)
+			return nil, fmt.Errorf("reading header: %w", err)
 		}
 		if len(line) == 0 {
 			break
@@ -314,10 +312,17 @@ func (r *Reader) ReadRecord(opts ...ReadOpts) (*Record, int64, error) {
 
 	length, err := strconv.ParseInt(header.Get("Content-Length"), 10, 64)
 	if err != nil {
-		return nil, 0, fmt.Errorf("parsing Content-Length: %w", err)
+		return nil, fmt.Errorf("parsing Content-Length: %w", err)
 	}
 
 	buf := spooledtempfile.NewSpooledTempFile("warc", "", r.threshold, false, -1)
+	bufOK := false
+	defer func() { // close spooledtempfile if error occurs
+		if !bufOK {
+			buf.Close()
+		}
+	}()
+
 	if discardContent {
 		// Fast skip: avoids moving bytes to io.Discard through extra copying.
 		if err := discardN(r.bufReader, length); err != nil {
@@ -325,23 +330,17 @@ func (r *Reader) ReadRecord(opts ...ReadOpts) (*Record, int64, error) {
 		}
 	} else {
 		if _, err := io.CopyN(buf, r.bufReader, length); err != nil {
-			return nil, 0, fmt.Errorf("copying content: %w", err)
+			return nil, fmt.Errorf("copying content: %w", err)
 		}
-	}
-
-	r.record = &Record{
-		Header:  header,
-		Content: buf,
-		Version: string(warcVer),
 	}
 
 	for range 2 {
 		boundary, _, err := readFn(r.bufReader, []byte("\r\n"))
 		if err != nil {
-			return r.record, 0, fmt.Errorf("reading record boundary: %w", err)
+			return nil, fmt.Errorf("reading record boundary: %w", err)
 		}
 		if len(boundary) != 0 {
-			return r.record, 0, fmt.Errorf("non-empty record boundary [boundary: %s]", boundary)
+			return nil, fmt.Errorf("non-empty record boundary [boundary: %s]", boundary)
 		}
 	}
 
@@ -349,12 +348,27 @@ func (r *Reader) ReadRecord(opts ...ReadOpts) (*Record, int64, error) {
 		// Ensure we fully consume the current gzip member so Reset() sees the next one.
 		// Must drain via bufReader (not r.dec) to consume any bytes it prefetched.
 		if _, derr := io.Copy(io.Discard, r.bufReader); derr != nil && derr != io.EOF {
-			return r.record, 0, fmt.Errorf("draining gzip member: %w", derr)
+			return nil, fmt.Errorf("draining gzip member: %w", derr)
 		}
 	}
 
-	compressedSize := r.cr.N() - startCompressed
-	return r.record, compressedSize, nil
+	bufOK = true
+	size := r.cr.Tell() - offset
+
+	if r.compType != decReaderGZip {
+		offset = -1
+		size = -1
+	}
+
+	record := &Record{
+		Header:  header,
+		Content: buf,
+		Version: string(warcVer),
+		Offset:  offset,
+		Size:    size,
+	}
+
+	return record, nil
 }
 
 // ReadOpts are options for ReadRecord

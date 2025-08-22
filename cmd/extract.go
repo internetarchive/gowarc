@@ -54,11 +54,11 @@ func extract(cmd *cobra.Command, files []string) {
 		}(resultsChan)
 
 		for {
-			record, size, err := reader.ReadRecord()
-			if size == 0 {
-				break
-			}
+			record, err := reader.ReadRecord()
 			if err != nil {
+				if err == io.EOF {
+					break
+				}
 				slog.Error("failed to read record", "err", err.Error(), "file", filepath)
 				return
 			}
