@@ -308,7 +308,7 @@ func verifyDigest(record *warc.Record, filepath string, algorithm warc.DigestAlg
 func verifyWARCVersion(record *warc.Record, filepath string) (valid bool) {
 	valid = true
 	if record.Version != "WARC/1.0" && record.Version != "WARC/1.1" {
-		logger.Error("invalid WARC version", "file", filepath, "recordID", record.Header.Get("WARC-Record)"))
+		logger.Error("invalid WARC version", "file", filepath, "recordID", record.Header.Get("WARC-Record-ID"))
 		valid = false
 	}
 
