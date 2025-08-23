@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"compress/bzip2"
+	"sync"
 
 	// "compress/gzip"
 	"encoding/binary"
@@ -140,6 +141,13 @@ func (r *Reader) Close() error {
 	return nil
 }
 
+var intermediateBufPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, 0, 4096)
+		return &b
+	},
+}
+
 // readUntilDelim reads from r until the multi-byte delimiter `delim` is found.
 // It returns the bytes BEFORE the delimiter, the total number of bytes consumed
 // from r (including the delimiter), and an error. If EOF occurs before seeing
@@ -150,7 +158,11 @@ func readUntilDelim(r *bufio.Reader, delim []byte) (line []byte, n int64, err er
 		return nil, 0, errors.New("empty delimiter")
 	}
 
-	intermediateBuf := make([]byte, 0, 4096)
+	intermediateBuf := *intermediateBufPool.Get().(*[]byte)
+	defer func() {
+		intermediateBufPool.Put(&intermediateBuf)
+	}()
+	intermediateBuf = intermediateBuf[:0]
 	last := delim[len(delim)-1]
 
 	for {
