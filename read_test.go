@@ -747,10 +747,6 @@ func human(n int64) string {
 
 // ---------------- Entry points ----------------
 
-func BenchmarkReadUntilDelim_Bytewise(b *testing.B) {
-	benchReadUntil(b, "bytewise", readUntilDelim)
-}
-
 func BenchmarkReadUntilDelim_Chunked(b *testing.B) {
-	benchReadUntil(b, "chunked", readUntilDelimChunked)
+	benchReadUntil(b, "chunked", readUntilDelim)
 }

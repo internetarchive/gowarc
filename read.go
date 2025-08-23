@@ -135,52 +135,12 @@ func (r *Reader) Close() error {
 // It returns the bytes BEFORE the delimiter, the total number of bytes consumed
 // from r (including the delimiter), and an error. If EOF occurs before seeing
 // the delimiter, it returns the data read and io.EOF.
+// This function is designed to handle larger inputs by reading in chunks.
 func readUntilDelim(r *bufio.Reader, delim []byte) (line []byte, n int64, err error) {
 	if len(delim) == 0 {
 		return nil, 0, errors.New("empty delimiter")
 	}
 
-	var buf bytes.Buffer
-	window := make([]byte, 0, len(delim))
-
-	for {
-		b, e := r.ReadByte()
-		if e != nil {
-			if e == io.EOF {
-				if buf.Len() == 0 {
-					return nil, n, io.EOF
-				}
-				return buf.Bytes(), n, io.EOF
-			}
-			return buf.Bytes(), n, e
-		}
-
-		n++
-		_ = buf.WriteByte(b)
-
-		if len(window) < len(delim) {
-			window = append(window, b)
-		} else {
-			copy(window, window[1:])
-			window[len(window)-1] = b
-		}
-
-		if len(window) == len(delim) && bytes.Equal(window, delim) {
-			buf.Truncate(buf.Len() - len(delim))
-			return buf.Bytes(), n, nil
-		}
-	}
-}
-
-// readUntilDelimChunked reads from r until the multi-byte delimiter `delim` is found.
-// It returns the bytes BEFORE the delimiter, the total number of bytes consumed
-// from r (including the delimiter), and an error. If EOF occurs before seeing
-// the delimiter, it returns the data read and io.EOF.
-// This function is designed to handle larger inputs by reading in chunks.
-func readUntilDelimChunked(r *bufio.Reader, delim []byte) (line []byte, n int64, err error) {
-	if len(delim) == 0 {
-		return nil, 0, errors.New("empty delimiter")
-	}
 	last := delim[len(delim)-1]
 	var buf []byte
 
@@ -236,14 +196,12 @@ func discardN(r *bufio.Reader, n int64) error {
 func (r *Reader) ReadRecord(opts ...ReadOpts) (*Record, error) {
 	var (
 		discardContent bool
-		readFn         = readUntilDelimChunked // generic; uses ReadSlice for speed
 	)
+
 	for _, opt := range opts {
 		switch opt {
 		case ReadOptsNoContentOutput:
 			discardContent = true
-		case ReadOptsBytewiseRead:
-			readFn = readUntilDelim // force slow path for testing
 		}
 	}
 
@@ -287,7 +245,7 @@ func (r *Reader) ReadRecord(opts ...ReadOpts) (*Record, error) {
 		}
 	}
 
-	warcVer, _, err := readFn(r.bufReader, []byte("\r\n"))
+	warcVer, _, err := readUntilDelim(r.bufReader, []byte("\r\n"))
 	if err != nil {
 		if err == io.EOF && len(warcVer) == 0 {
 			// treat as EOF for safety if member present but empty
@@ -298,7 +256,7 @@ func (r *Reader) ReadRecord(opts ...ReadOpts) (*Record, error) {
 
 	header := NewHeader()
 	for {
-		line, _, err := readFn(r.bufReader, []byte("\r\n"))
+		line, _, err := readUntilDelim(r.bufReader, []byte("\r\n"))
 		if err != nil {
 			return nil, fmt.Errorf("reading header: %w", err)
 		}
@@ -335,7 +293,7 @@ func (r *Reader) ReadRecord(opts ...ReadOpts) (*Record, error) {
 	}
 
 	for range 2 {
-		boundary, _, err := readFn(r.bufReader, []byte("\r\n"))
+		boundary, _, err := readUntilDelim(r.bufReader, []byte("\r\n"))
 		if err != nil {
 			return nil, fmt.Errorf("reading record boundary: %w", err)
 		}
@@ -378,9 +336,6 @@ const (
 	// ReadOptsNoContentOutput means that the content of the record should not be returned.
 	// This is useful for reading only the headers or metadata of the record.
 	ReadOptsNoContentOutput ReadOpts = iota
-	// ReadOptsBytewiseRead means that the record should be read byte by byte.
-	// This is provided for testing purposes as the chunked read is benchmarked to be more efficient.
-	ReadOptsBytewiseRead
 )
 
 // The following code was copied and adapted from https://github.com/crissyfield/troll-a/blob/main/pkg/fetch/decompression-reader.go , under Apache-2.0 License
