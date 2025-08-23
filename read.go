@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"compress/bzip2"
+
+	// "compress/gzip"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -101,6 +103,13 @@ func NewReader(reader io.ReadCloser) (*Reader, error) {
 		}
 	}
 
+	if _, ok := reader.(*os.File); ok {
+		// if reader is already a file, no need to use spooledtempfile
+		threshold = -1
+		// buffer the file reader to avoid small syscall reads
+		reader = io.NopCloser(bufio.NewReaderSize(reader, decompSize))
+	}
+
 	return &Reader{
 		src:           reader, // keep raw source
 		threshold:     threshold,
@@ -141,30 +150,34 @@ func readUntilDelim(r *bufio.Reader, delim []byte) (line []byte, n int64, err er
 		return nil, 0, errors.New("empty delimiter")
 	}
 
+	intermediateBuf := make([]byte, 0, 1024*1024)
 	last := delim[len(delim)-1]
-	var buf []byte
 
 	for {
-		part, e := r.ReadSlice(last) // fast path on '\n' for CRLF
-		n += int64(len(part))
-		buf = append(buf, part...)
+		// Read a chunk of data
+		chunk, e := r.ReadSlice(last)
+		n += int64(len(chunk))
+		intermediateBuf = append(intermediateBuf, chunk...)
 
-		start := len(buf) - len(part) - (len(delim) - 1)
+		// Search for the delimiter starting from a position that accounts for overlap
+		start := len(intermediateBuf) - len(chunk) - (len(delim) - 1)
 		if start < 0 {
 			start = 0
 		}
-		if i := bytes.Index(buf[start:], delim); i >= 0 {
+
+		if i := bytes.Index(intermediateBuf[start:], delim); i >= 0 {
 			i += start
-			return buf[:i], n, nil
+			return intermediateBuf[:i], n, nil
 		}
+
 		if e != nil {
 			if e == bufio.ErrBufferFull {
-				continue
+				continue // Continue reading if buffer is full
 			}
 			if e == io.EOF {
-				return buf, n, io.EOF
+				return intermediateBuf, n, io.EOF
 			}
-			return buf, n, e
+			return intermediateBuf, n, e
 		}
 	}
 }
