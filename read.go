@@ -104,12 +104,8 @@ func NewReader(reader io.ReadCloser) (*Reader, error) {
 		}
 	}
 
-	if _, ok := reader.(*os.File); ok {
-		// if reader is already a file, no need to use spooledtempfile
-		threshold = -1
-		// buffer the file reader to avoid small syscall reads
-		reader = io.NopCloser(bufio.NewReaderSize(reader, decompSize))
-	}
+	// buffer the reader to avoid small syscall reads for files or just buffer the unbuffered reader (e.g. bytes.Reader)
+	reader = io.NopCloser(bufio.NewReaderSize(reader, decompSize))
 
 	return &Reader{
 		src:           reader, // keep raw source
