@@ -150,7 +150,7 @@ func readUntilDelim(r *bufio.Reader, delim []byte) (line []byte, n int64, err er
 		return nil, 0, errors.New("empty delimiter")
 	}
 
-	intermediateBuf := make([]byte, 0, 1024*1024)
+	intermediateBuf := make([]byte, 0, 4096)
 	last := delim[len(delim)-1]
 
 	for {
