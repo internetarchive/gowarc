@@ -85,7 +85,7 @@ func (c *countingReader) ReadByte() (byte, error) {
 }
 
 // NewReader returns a new WARC reader
-func NewReader(reader io.ReadCloser) (*Reader, error) {
+func NewReader(reader io.Reader) (*Reader, error) {
 	threshold := -1
 	if s := os.Getenv(envMaxInMemSize); s != "" {
 		if v, err := strconv.Atoi(s); err == nil {
