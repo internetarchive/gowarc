@@ -33,7 +33,7 @@ const (
 type Reader struct {
 	threshold int
 
-	src       io.ReadCloser   // raw concatenated .gz input - wrapped in countingReader
+	src       io.Reader       // raw concatenated .gz input - wrapped in countingReader
 	cr        *countingReader // counts compressed bytes actually consumed
 	dec       io.ReadCloser   // current decompressor (gz/plain/…)
 	gz        *gzip.Reader    // cached when compType == decReaderGZip
@@ -118,13 +118,6 @@ func NewReader(reader io.ReadCloser) (*Reader, error) {
 func (r *Reader) Close() error {
 	if !r.inited {
 		return nil
-	}
-
-	if r.src != nil {
-		if err := r.src.Close(); err != nil {
-			return fmt.Errorf("close source: %w", err)
-		}
-		r.src = nil
 	}
 
 	if r.dec != nil {
