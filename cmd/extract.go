@@ -16,7 +16,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/internetarchive/gowarc"
+	warc "github.com/internetarchive/gowarc"
 	"github.com/remeh/sizedwaitgroup"
 	"github.com/spf13/cobra"
 )
@@ -54,11 +54,11 @@ func extract(cmd *cobra.Command, files []string) {
 		}(resultsChan)
 
 		for {
-			record, eol, err := reader.ReadRecord()
-			if eol {
-				break
-			}
+			record, err := reader.ReadRecord()
 			if err != nil {
+				if err == io.EOF {
+					break
+				}
 				slog.Error("failed to read record", "err", err.Error(), "file", filepath)
 				return
 			}
