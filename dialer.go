@@ -35,7 +35,12 @@ type customDialer struct {
 	disableIPv6 bool
 }
 
-var emptyPayloadDigest = "3I42H3S6NNFQ2MSVX7XZKYAYSCX5QBYJ"
+var emptyPayloadDigests = []string{
+	"sha1:3I42H3S6NNFQ2MSVX7XZKYAYSCX5QBYJ",
+	"sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+	"sha256:4OYMIQUY7QOBJGX36TEJS35ZEQT24QPEMSNZGTFESWMRW6CSXBKQ====",
+	"blake3:af1349b9f5f9a1a6a0404dbb43b8b8c76550a4d239d7e2d7f7f4e6c7ee6c7f7f",
+}
 
 func newCustomDialer(httpClient *CustomHTTPClient, proxyURL string, DialTimeout, DNSRecordsTTL, DNSResolutionTimeout time.Duration, DNSCacheSize int, DNSServers []string, disableIPv4, disableIPv6 bool) (d *customDialer, err error) {
 	d = new(customDialer)
@@ -430,11 +435,20 @@ func (d *customDialer) writeWARCFromConnection(ctx context.Context, reqPipe, res
 				return
 			}
 
-			r.Header.Set("WARC-Block-Digest", "sha1:"+GetSHA1(r.Content))
+			digest, err := GetDigest(r.Content, d.client.digestAlgorithm)
+			if err != nil {
+				d.client.ErrChan <- &Error{
+					Err:  err,
+					Func: "writeWARCFromConnection",
+				}
+				return
+			}
+
+			r.Header.Set("WARC-Block-Digest", digest)
 			r.Header.Set("Content-Length", strconv.Itoa(getContentLength(r.Content)))
 
 			if d.client.dedupeOptions.LocalDedupe {
-				if r.Header.Get("WARC-Type") == "response" && r.Header.Get("WARC-Payload-Digest")[5:] != emptyPayloadDigest {
+				if r.Header.Get("WARC-Type") == "response" && slices.Contains(emptyPayloadDigests, r.Header.Get("WARC-Payload-Digest")) {
 					captureTime, timeConversionErr := time.Parse(time.RFC3339, batch.CaptureTime)
 					if timeConversionErr != nil {
 						d.client.ErrChan <- &Error{
@@ -443,7 +457,7 @@ func (d *customDialer) writeWARCFromConnection(ctx context.Context, reqPipe, res
 						}
 						return
 					}
-					d.client.dedupeHashTable.Store(r.Header.Get("WARC-Payload-Digest")[5:], revisitRecord{
+					d.client.dedupeHashTable.Store(r.Header.Get("WARC-Payload-Digest"), revisitRecord{
 						responseUUID: recordIDs[i],
 						size:         getContentLength(r.Content),
 						targetURI:    warcTargetURI,
@@ -511,22 +525,21 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 	}
 
 	// Calculate the WARC-Payload-Digest
-	payloadDigest := GetSHA1(resp.Body)
-	if strings.HasPrefix(payloadDigest, "ERROR: ") {
-		// This should _never_ happen.
-		return fmt.Errorf("readResponse: SHA1 ran into an unrecoverable error: %s url: %s", payloadDigest, warcTargetURI)
+	payloadDigest, err := GetDigest(resp.Body, d.client.digestAlgorithm)
+	if err != nil {
+		return fmt.Errorf("readResponse: payload digest calculation failed: %s", err.Error())
 	}
 
 	err = resp.Body.Close()
 	if err != nil {
-		return fmt.Errorf("readResponse: closing body after SHA1 calculation failed: %s", err.Error())
+		return fmt.Errorf("readResponse: closing body after digest calculation failed: %s", err.Error())
 	}
 
-	responseRecord.Header.Set("WARC-Payload-Digest", "sha1:"+payloadDigest)
+	responseRecord.Header.Set("WARC-Payload-Digest", payloadDigest)
 
 	// Write revisit record if local, CDX, or Doppelganger dedupe is activated and finds match.
 	var revisit = revisitRecord{}
-	if bytesCopied >= int64(d.client.dedupeOptions.SizeThreshold) && payloadDigest != emptyPayloadDigest {
+	if bytesCopied >= int64(d.client.dedupeOptions.SizeThreshold) && slices.Contains(emptyPayloadDigests, payloadDigest) {
 		if d.client.dedupeOptions.LocalDedupe {
 			revisit = d.checkLocalRevisit(payloadDigest)
 			if revisit.targetURI != "" {
@@ -553,7 +566,7 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 		}
 	}
 
-	if revisit.targetURI != "" && payloadDigest != emptyPayloadDigest {
+	if revisit.targetURI != "" && slices.Contains(emptyPayloadDigests, payloadDigest) {
 		responseRecord.Header.Set("WARC-Type", "revisit")
 		responseRecord.Header.Set("WARC-Refers-To-Target-URI", revisit.targetURI)
 		responseRecord.Header.Set("WARC-Refers-To-Date", revisit.date.Format(time.RFC3339Nano))
