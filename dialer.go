@@ -39,7 +39,7 @@ var emptyPayloadDigests = []string{
 	"sha1:3I42H3S6NNFQ2MSVX7XZKYAYSCX5QBYJ",
 	"sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
 	"sha256:4OYMIQUY7QOBJGX36TEJS35ZEQT24QPEMSNZGTFESWMRW6CSXBKQ====",
-	"blake3:af1349b9f5f9a1a6a0404dbb43b8b8c76550a4d239d7e2d7f7f4e6c7ee6c7f7f",
+	"blake3:af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262",
 }
 
 func newCustomDialer(httpClient *CustomHTTPClient, proxyURL string, DialTimeout, DNSRecordsTTL, DNSResolutionTimeout time.Duration, DNSCacheSize int, DNSServers []string, disableIPv4, disableIPv6 bool) (d *customDialer, err error) {
