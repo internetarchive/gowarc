@@ -15,12 +15,42 @@ type DigestAlgorithm int
 
 const (
 	SHA1 DigestAlgorithm = iota
+	// According to IIPC, lowercase base 16 is the "popular" encoding for SHA256
 	SHA256Base16
 	SHA256Base32
 	BLAKE3
 )
 
 var ErrUnknownDigestAlgorithm = errors.New("unknown digest algorithm")
+
+// Map of supported algorithms to their corresponding digest functions
+// digestFunctions := map[string]warc.DigestAlgorithm{
+// 	"sha1":   warc.SHA1,
+// 	"sha256": warc.SHA256Base16,
+// 	"blake3": warc.BLAKE3,
+// }
+
+func IsDigestSupported(algorithm string) bool {
+	switch algorithm {
+	case "sha1", "sha-1", "sha256", "sha-256", "blake3":
+		return true
+	default:
+		return false
+	}
+}
+
+func GetDigestFromPrefix(prefix string) DigestAlgorithm {
+	switch prefix {
+	case "sha1", "sha-1":
+		return SHA1
+	case "sha256", "sha-256":
+		return SHA256Base16
+	case "blake3":
+		return BLAKE3
+	default:
+		return -1
+	}
+}
 
 func GetDigest(r io.Reader, digestAlgorithm DigestAlgorithm) (string, error) {
 	switch digestAlgorithm {
