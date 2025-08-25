@@ -35,7 +35,12 @@ type customDialer struct {
 	disableIPv6 bool
 }
 
-var emptyPayloadDigest = "sha1:3I42H3S6NNFQ2MSVX7XZKYAYSCX5QBYJ"
+var emptyPayloadDigests = []string{
+	"sha1:3I42H3S6NNFQ2MSVX7XZKYAYSCX5QBYJ",
+	"sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+	"sha256:4OYMIQUY7QOBJGX36TEJS35ZEQT24QPEMSNZGTFESWMRW6CSXBKQ====",
+	"blake3:af1349b9f5f9a1a6a0404dbb43b8b8c76550a4d239d7e2d7f7f4e6c7ee6c7f7f",
+}
 
 func newCustomDialer(httpClient *CustomHTTPClient, proxyURL string, DialTimeout, DNSRecordsTTL, DNSResolutionTimeout time.Duration, DNSCacheSize int, DNSServers []string, disableIPv4, disableIPv6 bool) (d *customDialer, err error) {
 	d = new(customDialer)
@@ -451,7 +456,7 @@ func (d *customDialer) writeWARCFromConnection(ctx context.Context, reqPipe, res
 			r.Header.Set("Content-Length", strconv.Itoa(getContentLength(r.Content)))
 
 			if d.client.dedupeOptions.LocalDedupe {
-				if r.Header.Get("WARC-Type") == "response" && r.Header.Get("WARC-Payload-Digest")[5:] != emptyPayloadDigest {
+				if r.Header.Get("WARC-Type") == "response" && slices.Contains(emptyPayloadDigests, r.Header.Get("WARC-Payload-Digest")) {
 					captureTime, timeConversionErr := time.Parse(time.RFC3339, batch.CaptureTime)
 					if timeConversionErr != nil {
 						d.client.ErrChan <- &Error{
@@ -542,7 +547,7 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 
 	// Write revisit record if local, CDX, or Doppelganger dedupe is activated and finds match.
 	var revisit = revisitRecord{}
-	if bytesCopied >= int64(d.client.dedupeOptions.SizeThreshold) && payloadDigest != emptyPayloadDigest {
+	if bytesCopied >= int64(d.client.dedupeOptions.SizeThreshold) && slices.Contains(emptyPayloadDigests, payloadDigest) {
 		if d.client.dedupeOptions.LocalDedupe {
 			revisit = d.checkLocalRevisit(payloadDigest)
 			if revisit.targetURI != "" {
@@ -569,7 +574,7 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 		}
 	}
 
-	if revisit.targetURI != "" && payloadDigest != emptyPayloadDigest {
+	if revisit.targetURI != "" && slices.Contains(emptyPayloadDigests, payloadDigest) {
 		responseRecord.Header.Set("WARC-Type", "revisit")
 		responseRecord.Header.Set("WARC-Refers-To-Target-URI", revisit.targetURI)
 		responseRecord.Header.Set("WARC-Refers-To-Date", revisit.date.Format(time.RFC3339Nano))
