@@ -557,7 +557,8 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 		}
 
 		// If local dedupe does not find anything, we will check Doppelganger (if set) then CDX (if set).
-		if d.client.dedupeOptions.DoppelgangerDedupe && revisit.targetURI == "" {
+		// TODO: Latest doppelganger dev branch does not support anything other than SHA1. This will be modified later.
+		if d.client.dedupeOptions.DoppelgangerDedupe && d.client.digestAlgorithm == SHA1 && revisit.targetURI == "" {
 			revisit, _ = checkDoppelgangerRevisit(d.client.dedupeOptions.DoppelgangerHost, payloadDigest, warcTargetURI)
 			if revisit.targetURI != "" {
 				DoppelgangerDedupeTotalBytes.Add(bytesCopied)
@@ -565,7 +566,8 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 			}
 		}
 
-		if d.client.dedupeOptions.CDXDedupe && revisit.targetURI == "" {
+		// IA CDX dedupe does not support anything other than SHA1 at the moment. We should add a flag to support more.
+		if d.client.dedupeOptions.CDXDedupe && d.client.digestAlgorithm == SHA1 && revisit.targetURI == "" {
 			revisit, _ = checkCDXRevisit(d.client.dedupeOptions.CDXURL, payloadDigest, warcTargetURI, d.client.dedupeOptions.CDXCookie)
 			if revisit.targetURI != "" {
 				CDXDedupeTotalBytes.Add(bytesCopied)
