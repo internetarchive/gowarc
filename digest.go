@@ -6,6 +6,7 @@ import (
 	"encoding/base32"
 	"encoding/hex"
 	"errors"
+	"hash"
 	"io"
 
 	"github.com/zeebo/blake3"
@@ -22,13 +23,6 @@ const (
 )
 
 var ErrUnknownDigestAlgorithm = errors.New("unknown digest algorithm")
-
-// Map of supported algorithms to their corresponding digest functions
-// digestFunctions := map[string]warc.DigestAlgorithm{
-// 	"sha1":   warc.SHA1,
-// 	"sha256": warc.SHA256Base16,
-// 	"blake3": warc.BLAKE3,
-// }
 
 func IsDigestSupported(algorithm string) bool {
 	switch algorithm {
@@ -53,60 +47,42 @@ func GetDigestFromPrefix(prefix string) DigestAlgorithm {
 }
 
 func GetDigest(r io.Reader, digestAlgorithm DigestAlgorithm) (string, error) {
+	var (
+		hashFunc     func() any
+		prefix       string
+		encodingFunc func([]byte) string
+	)
+
 	switch digestAlgorithm {
 	case SHA1:
-		return getSHA1(r)
+		hashFunc = func() any { return sha1.New() }
+		prefix = "sha1:"
+		encodingFunc = func(b []byte) string {
+			return base32.StdEncoding.EncodeToString(b)
+		}
 	case SHA256Base16:
-		return getSHA256Base16(r)
+		hashFunc = func() any { return sha256.New() }
+		prefix = "sha256:"
+		encodingFunc = hex.EncodeToString
 	case SHA256Base32:
-		return getSHA256Base32(r)
+		hashFunc = func() any { return sha256.New() }
+		prefix = "sha256:"
+		encodingFunc = func(b []byte) string {
+			return base32.StdEncoding.EncodeToString(b)
+		}
 	case BLAKE3:
-		return getBLAKE3(r)
+		hashFunc = func() any { return blake3.New() }
+		prefix = "blake3:"
+		encodingFunc = hex.EncodeToString
 	default:
 		return "", ErrUnknownDigestAlgorithm
 	}
-}
 
-func getSHA1(r io.Reader) (string, error) {
-	sha := sha1.New()
-
-	_, err := io.Copy(sha, r)
+	hasher := hashFunc()
+	_, err := io.Copy(hasher.(io.Writer), r)
 	if err != nil {
 		return "", err
 	}
 
-	return "sha1:" + base32.StdEncoding.EncodeToString(sha.Sum(nil)), nil
-}
-
-func getSHA256Base32(r io.Reader) (string, error) {
-	sha := sha256.New()
-
-	_, err := io.Copy(sha, r)
-	if err != nil {
-		return "", err
-	}
-
-	return "sha256:" + base32.StdEncoding.EncodeToString(sha.Sum(nil)), nil
-}
-
-func getSHA256Base16(r io.Reader) (string, error) {
-	sha := sha256.New()
-
-	_, err := io.Copy(sha, r)
-	if err != nil {
-		return "", err
-	}
-
-	return "sha256:" + hex.EncodeToString(sha.Sum(nil)), nil
-}
-
-func getBLAKE3(r io.Reader) (string, error) {
-	hash := blake3.New()
-
-	_, err := io.Copy(hash, r)
-	if err != nil {
-		return "", err
-	}
-
-	return "blake3:" + hex.EncodeToString(hash.Sum(nil)), nil
+	return prefix + encodingFunc(hasher.(hash.Hash).Sum(nil)), nil
 }
