@@ -456,7 +456,7 @@ func (d *customDialer) writeWARCFromConnection(ctx context.Context, reqPipe, res
 			r.Header.Set("Content-Length", strconv.Itoa(getContentLength(r.Content)))
 
 			if d.client.dedupeOptions.LocalDedupe {
-				if r.Header.Get("WARC-Type") == "response" && slices.Contains(emptyPayloadDigests, r.Header.Get("WARC-Payload-Digest")) {
+				if r.Header.Get("WARC-Type") == "response" && !slices.Contains(emptyPayloadDigests, r.Header.Get("WARC-Payload-Digest")) {
 					captureTime, timeConversionErr := time.Parse(time.RFC3339, batch.CaptureTime)
 					if timeConversionErr != nil {
 						d.client.ErrChan <- &Error{
@@ -547,7 +547,7 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 
 	// Write revisit record if local, CDX, or Doppelganger dedupe is activated and finds match.
 	var revisit = revisitRecord{}
-	if bytesCopied >= int64(d.client.dedupeOptions.SizeThreshold) && slices.Contains(emptyPayloadDigests, payloadDigest) {
+	if bytesCopied >= int64(d.client.dedupeOptions.SizeThreshold) && !slices.Contains(emptyPayloadDigests, payloadDigest) {
 		if d.client.dedupeOptions.LocalDedupe {
 			revisit = d.checkLocalRevisit(payloadDigest)
 			if revisit.targetURI != "" {
@@ -574,7 +574,7 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 		}
 	}
 
-	if revisit.targetURI != "" && slices.Contains(emptyPayloadDigests, payloadDigest) {
+	if revisit.targetURI != "" && !slices.Contains(emptyPayloadDigests, payloadDigest) {
 		responseRecord.Header.Set("WARC-Type", "revisit")
 		responseRecord.Header.Set("WARC-Refers-To-Target-URI", revisit.targetURI)
 		responseRecord.Header.Set("WARC-Refers-To-Date", revisit.date.Format(time.RFC3339Nano))
