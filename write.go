@@ -17,12 +17,13 @@ import (
 
 // Writer writes WARC records to WARC files.
 type Writer struct {
-	GZIPWriter   *gzip.Writer
-	ZSTDWriter   *zstd.Encoder
-	FileWriter   *bufio.Writer
-	FileName     string
-	Compression  string
-	ParallelGZIP bool
+	GZIPWriter      *gzip.Writer
+	ZSTDWriter      *zstd.Encoder
+	FileWriter      *bufio.Writer
+	FileName        string
+	Compression     string
+	DigestAlgorithm DigestAlgorithm
+	ParallelGZIP    bool
 }
 
 // RecordBatch is a structure that contains a bunch of
@@ -84,7 +85,13 @@ func (w *Writer) WriteRecord(r *Record) (recordID string, err error) {
 
 	if r.Header.Get("WARC-Block-Digest") == "" {
 		r.Content.Seek(0, 0)
-		r.Header.Set("WARC-Block-Digest", "sha1:"+GetSHA1(r.Content))
+
+		digest, err := GetDigest(r.Content, w.DigestAlgorithm)
+		if err != nil {
+			return recordID, err
+		}
+
+		r.Header.Set("WARC-Block-Digest", digest)
 	}
 
 	for key, value := range r.Header {
@@ -129,11 +136,16 @@ func (w *Writer) WriteInfoRecord(payload map[string]string) (recordID string, er
 
 	// Write the payload
 	for k, v := range payload {
-		infoRecord.Content.Write([]byte(fmt.Sprintf("%s: %s\r\n", k, v)))
+		fmt.Fprintf(infoRecord.Content, "%s: %s\r\n", k, v)
 	}
 
 	// Generate WARC-Block-Digest
-	infoRecord.Header.Set("WARC-Block-Digest", "sha1:"+GetSHA1(infoRecord.Content))
+	digest, err := GetDigest(infoRecord.Content, w.DigestAlgorithm)
+	if err != nil {
+		return recordID, err
+	}
+
+	infoRecord.Header.Set("WARC-Block-Digest", digest)
 
 	// Finally, write the record and flush the data
 	recordID, err = w.WriteRecord(infoRecord)

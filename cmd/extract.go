@@ -197,12 +197,18 @@ func writeFile(vmd *cobra.Command, resp *http.Response, record *warc.Record) err
 				reader = bytes.NewReader(body)
 			}
 
-			payloadDigest := warc.GetSHA1(reader)
+			payloadDigest, err := warc.GetDigest(reader, warc.SHA1)
+			if err != nil {
+				return err
+			}
 
 			// Reset response reader
 			resp.Body = io.NopCloser(bytes.NewBuffer(body))
 
-			originalPayloadDigest := warc.GetSHA1(originalFile)
+			originalPayloadDigest, err := warc.GetDigest(originalFile, warc.SHA1)
+			if err != nil {
+				return err
+			}
 
 			if originalPayloadDigest != payloadDigest {
 				if len(filename) > 247 {
