@@ -23,7 +23,7 @@ type RotatorSettings struct {
 	// Compression algorithm to use
 	Compression string
 	// Payload digest calculation algorithm to use
-	DigestAlgorithm DigestAlgorithm
+	digestAlgorithm DigestAlgorithm
 	// Path to a ZSTD compression dictionary to embed (and use) in .warc.zst files
 	CompressionDictionary string
 	// Directory where the created WARC files will be stored,
@@ -117,7 +117,7 @@ func recordWriter(settings *RotatorSettings, records chan *RecordBatch, done cha
 	fileMutex.Unlock()
 
 	// Initialize WARC writer
-	warcWriter, err := NewWriter(warcFile, currentFileName, settings.DigestAlgorithm, settings.Compression, "", true, dictionary)
+	warcWriter, err := NewWriter(warcFile, currentFileName, settings.digestAlgorithm, settings.Compression, "", true, dictionary)
 	if err != nil {
 		panic(err)
 	}
@@ -135,7 +135,7 @@ func recordWriter(settings *RotatorSettings, records chan *RecordBatch, done cha
 			panic(err)
 		}
 
-		warcWriter, err = NewWriter(warcFile, currentFileName, settings.DigestAlgorithm, settings.Compression, "", false, dictionary)
+		warcWriter, err = NewWriter(warcFile, currentFileName, settings.digestAlgorithm, settings.Compression, "", false, dictionary)
 		if err != nil {
 			panic(err)
 		}
@@ -174,7 +174,7 @@ func recordWriter(settings *RotatorSettings, records chan *RecordBatch, done cha
 				}
 
 				// Initialize new WARC writer
-				warcWriter, err = NewWriter(warcFile, currentFileName, settings.DigestAlgorithm, settings.Compression, "", true, dictionary)
+				warcWriter, err = NewWriter(warcFile, currentFileName, settings.digestAlgorithm, settings.Compression, "", true, dictionary)
 				if err != nil {
 					panic(err)
 				}
@@ -196,7 +196,7 @@ func recordWriter(settings *RotatorSettings, records chan *RecordBatch, done cha
 
 			// Write all the records of the record batch
 			for _, record := range recordBatch.Records {
-				warcWriter, err = NewWriter(warcFile, currentFileName, settings.DigestAlgorithm, settings.Compression, record.Header.Get("Content-Length"), false, dictionary)
+				warcWriter, err = NewWriter(warcFile, currentFileName, settings.digestAlgorithm, settings.Compression, record.Header.Get("Content-Length"), false, dictionary)
 				if err != nil {
 					panic(err)
 				}

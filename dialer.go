@@ -435,7 +435,7 @@ func (d *customDialer) writeWARCFromConnection(ctx context.Context, reqPipe, res
 				return
 			}
 
-			digest, err := GetDigest(r.Content, d.client.digestAlgorithm)
+			digest, err := GetDigest(r.Content, d.client.DigestAlgorithm)
 			if err != nil {
 				d.client.ErrChan <- &Error{
 					Err:  err,
@@ -525,7 +525,7 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 	}
 
 	// Calculate the WARC-Payload-Digest
-	payloadDigest, err := GetDigest(resp.Body, d.client.digestAlgorithm)
+	payloadDigest, err := GetDigest(resp.Body, d.client.DigestAlgorithm)
 	if err != nil {
 		return fmt.Errorf("readResponse: payload digest calculation failed: %s", err.Error())
 	}
@@ -550,7 +550,7 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 
 		// If local dedupe does not find anything, we will check Doppelganger (if set) then CDX (if set).
 		// TODO: Latest doppelganger dev branch does not support anything other than SHA1. This will be modified later.
-		if d.client.dedupeOptions.DoppelgangerDedupe && d.client.digestAlgorithm == SHA1 && revisit.targetURI == "" {
+		if d.client.dedupeOptions.DoppelgangerDedupe && d.client.DigestAlgorithm == SHA1 && revisit.targetURI == "" {
 			revisit, _ = checkDoppelgangerRevisit(d.client.dedupeOptions.DoppelgangerHost, payloadDigest, warcTargetURI)
 			if revisit.targetURI != "" {
 				DoppelgangerDedupeTotalBytes.Add(bytesCopied)
@@ -559,7 +559,7 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 		}
 
 		// IA CDX dedupe does not support anything other than SHA1 at the moment. We should add a flag to support more.
-		if d.client.dedupeOptions.CDXDedupe && d.client.digestAlgorithm == SHA1 && revisit.targetURI == "" {
+		if d.client.dedupeOptions.CDXDedupe && d.client.DigestAlgorithm == SHA1 && revisit.targetURI == "" {
 			revisit, _ = checkCDXRevisit(d.client.dedupeOptions.CDXURL, payloadDigest, warcTargetURI, d.client.dedupeOptions.CDXCookie)
 			if revisit.targetURI != "" {
 				CDXDedupeTotalBytes.Add(bytesCopied)
