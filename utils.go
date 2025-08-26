@@ -147,7 +147,7 @@ func NewRotatorSettings() *RotatorSettings {
 		Prefix:                "WARC",
 		WARCSize:              1000,
 		Compression:           "GZIP",
-		DigestAlgorithm:       SHA1,
+		digestAlgorithm:       SHA1,
 		CompressionDictionary: "",
 		OutputDirectory:       "./",
 	}
