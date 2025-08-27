@@ -26,7 +26,7 @@ var ErrUnknownDigestAlgorithm = errors.New("unknown digest algorithm")
 
 func IsDigestSupported(algorithm string) bool {
 	switch algorithm {
-	case "sha1", "sha-1", "sha256", "sha-256", "blake3":
+	case "sha1", "sha256", "blake3":
 		return true
 	default:
 		return false
