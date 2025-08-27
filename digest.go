@@ -35,9 +35,9 @@ func IsDigestSupported(algorithm string) bool {
 
 func GetDigestFromPrefix(prefix string) DigestAlgorithm {
 	switch prefix {
-	case "sha1", "sha-1":
+	case "sha1":
 		return SHA1
-	case "sha256", "sha-256":
+	case "sha256":
 		return SHA256Base16
 	case "blake3":
 		return BLAKE3
