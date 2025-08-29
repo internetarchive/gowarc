@@ -41,6 +41,8 @@ type Record struct {
 	Header  Header
 	Content spooledtempfile.ReadWriteSeekCloser
 	Version string // WARC/1.0, WARC/1.1 ...
+	Offset  int64  // Offset of the record start (-1 if WARC file type is not supported yet)
+	Size    int64  // COMPRESSED size of the record (gzip member): header + deflate data + trailer. (-1 if WARC file type is not supported yet)
 }
 
 // WriteRecord writes a record to the underlying WARC file.
