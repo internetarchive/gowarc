@@ -33,7 +33,7 @@ const (
 type Reader struct {
 	threshold int
 
-	src       io.Reader       // raw concatenated .gz input - wrapped in countingReader
+	src       *bufio.Reader   // raw concatenated .gz input - wrapped in countingReader
 	cr        *countingReader // counts compressed bytes actually consumed
 	dec       io.ReadCloser   // current decompressor (gz/plain/…)
 	gz        *gzip.Reader    // cached when compType == decReaderGZip
@@ -104,11 +104,8 @@ func NewReader(reader io.Reader) (*Reader, error) {
 		}
 	}
 
-	// buffer the reader to avoid small syscall reads for files or just buffer the unbuffered reader (e.g. bytes.Reader)
-	reader = io.NopCloser(bufio.NewReaderSize(reader, decompSize))
-
 	return &Reader{
-		src:           reader, // keep raw source
+		src:           bufio.NewReaderSize(reader, decompSize), // buffer the source reader (mainly to avoid small syscalls)
 		threshold:     threshold,
 		decompBufSize: decompSize,
 	}, nil
