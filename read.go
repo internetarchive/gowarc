@@ -23,9 +23,10 @@ import (
 // -------- Perf knobs (env tunables) --------
 
 const (
-	envMaxInMemSize         = "WARCMaxInMemorySize"        // same as before
-	envDecompressedBufSize  = "WARCDecompressedBufSize"    // bytes; default 256 KiB
-	envZstdDecoderConc      = "WARCZstdDecoderConcurrency" // >1 enables parallel Zstd decode
+	envMaxInMemSize         = "WARCMaxInMemorySize"        // in bytes; warc record content spooling threshold; if not set, calls NewSpooledTempFile with -1 which will default internally to MaxInMemorySize (1MB)
+	envDecompressedBufSize  = "WARCDecompressedBufSize"    // in bytes; defines the bufio reader used by the decompression layer; if not set, defaults to defaultDecompressedSize (256 KiB)
+	envZstdDecoderConc      = "WARCZstdDecoderConcurrency" // >1 enables parallel Zstd decode ; if not set, defaults to defaultZstdDecoderConc (1)
+	defaultZstdDecoderConc  = 1                            // default Zstd decoder concurrency (1 == no parallelism)
 	defaultDecompressedSize = 256 << 10                    // 256 KiB is a good gzip/zstd sweet spot
 )
 
@@ -463,7 +464,7 @@ func decompressXZ(br *countingReader) (io.ReadCloser, error) {
 // decompressZStd decompresses a ZStd stream from the given input reader r.
 func decompressZStd(br *countingReader) (io.ReadCloser, error) {
 	// Keep previous behavior (single-thread) unless overridden by env.
-	concurrency := 1
+	concurrency := defaultZstdDecoderConc
 	if s := os.Getenv(envZstdDecoderConc); s != "" {
 		if v, err := strconv.Atoi(s); err == nil && v >= 0 {
 			// v==0 lets zstd pick an automatic value; v>=1 sets exact goroutines.
@@ -518,7 +519,7 @@ func decompressZStdCustomDict(br *countingReader) (io.ReadCloser, error) {
 	}
 
 	// Open ZStd reader, with the given dictionary
-	concurrency := 1
+	concurrency := defaultZstdDecoderConc
 	if s := os.Getenv(envZstdDecoderConc); s != "" {
 		if v, err := strconv.Atoi(s); err == nil && v >= 0 {
 			concurrency = v
