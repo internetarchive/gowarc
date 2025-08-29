@@ -146,3 +146,73 @@ func TestBlake3EmptyBytes(t *testing.T) {
 
 	t.Logf("BLAKE3 hash of empty bytes: %s", hash)
 }
+
+func TestGetSHA3256(t *testing.T) {
+	helloWorldSHA3256 := "sha3-256:644bcc7e564373040999aac89e7622f3ca71fba1d972fd94a31c3bfbf24e3938"
+
+	hash, err := GetDigest(bytes.NewReader([]byte("hello world")), SHA3256Base16)
+	if err != nil {
+		t.Errorf("Failed to generate SHA3-256: %v", err)
+		return
+	}
+
+	if hash != helloWorldSHA3256 {
+		t.Errorf("Failed to generate SHA3-256, expected %s, got %s", helloWorldSHA3256, hash)
+		return
+	}
+}
+
+func TestSHA3256EmptyBytes(t *testing.T) {
+	// Create an empty byte slice reader
+	emptyBytes := make([]byte, 0)
+	emptyReader := strings.NewReader(string(emptyBytes))
+
+	// Generate SHA3256 hash
+	hash, err := GetDigest(emptyReader, SHA3256Base16)
+	if err != nil {
+		t.Fatalf("failed to get SHA3-256 digest of empty bytes: %v", err)
+	}
+
+	expectedHash := "sha3-256:a7ffc6f8bf1ed76651c14756a061d662f580ff4de43b49fa82d80a4b80f8434a"
+
+	if hash != expectedHash {
+		t.Fatalf("expected SHA3-256 hash %s, got %s", expectedHash, hash)
+	}
+
+	t.Logf("SHA3-256 hash of empty bytes: %s", hash)
+}
+
+func TestGetSHA3512(t *testing.T) {
+	helloWorldSHA3512 := "sha3-512:840006653e9ac9e95117a15c915caab81662918e925de9e004f774ff82d7079a40d4d27b1b372657c61d46d470304c88c788b3a4527ad074d1dccbee5dbaa99a"
+
+	hash, err := GetDigest(bytes.NewReader([]byte("hello world")), SHA3512Base16)
+	if err != nil {
+		t.Errorf("Failed to generate SHA3-512: %v", err)
+		return
+	}
+
+	if hash != helloWorldSHA3512 {
+		t.Errorf("Failed to generate SHA3-512, expected %s, got %s", helloWorldSHA3512, hash)
+		return
+	}
+}
+
+func TestSHA3512EmptyBytes(t *testing.T) {
+	// Create an empty byte slice reader
+	emptyBytes := make([]byte, 0)
+	emptyReader := strings.NewReader(string(emptyBytes))
+
+	// Generate SHA3512 hash
+	hash, err := GetDigest(emptyReader, SHA3512Base16)
+	if err != nil {
+		t.Fatalf("failed to get SHA3-512 digest of empty bytes: %v", err)
+	}
+
+	expectedHash := "sha3-512:a69f73cca23a9ac5c8b567dc185a756e97c982164fe25859e0d1dcc1475c80a615b2123af1f5f94c11e3e9402c3ac558f500199d95b6d3e301758586281dcd26"
+
+	if hash != expectedHash {
+		t.Fatalf("expected SHA3-512 hash %s, got %s", expectedHash, hash)
+	}
+
+	t.Logf("SHA3-512 hash of empty bytes: %s", hash)
+}

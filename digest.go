@@ -3,6 +3,7 @@ package warc
 import (
 	"crypto/sha1"
 	"crypto/sha256"
+	"crypto/sha3"
 	"encoding/base32"
 	"encoding/hex"
 	"errors"
@@ -19,6 +20,8 @@ const (
 	// According to IIPC, lowercase base 16 is the "popular" encoding for SHA256
 	SHA256Base16
 	SHA256Base32
+	SHA3256Base16
+	SHA3512Base16
 	BLAKE3
 )
 
@@ -26,7 +29,7 @@ var ErrUnknownDigestAlgorithm = errors.New("unknown digest algorithm")
 
 func IsDigestSupported(algorithm string) bool {
 	switch algorithm {
-	case "sha1", "sha-1", "sha256", "sha-256", "blake3":
+	case "sha1", "sha-1", "sha256", "sha-256", "sha3-256", "sha3-512", "blake3":
 		return true
 	default:
 		return false
@@ -39,6 +42,10 @@ func GetDigestFromPrefix(prefix string) DigestAlgorithm {
 		return SHA1
 	case "sha256", "sha-256":
 		return SHA256Base16
+	case "sha3-256":
+		return SHA3256Base16
+	case "sha3-512":
+		return SHA3512Base16
 	case "blake3":
 		return BLAKE3
 	default:
@@ -70,6 +77,14 @@ func GetDigest(r io.Reader, digestAlgorithm DigestAlgorithm) (string, error) {
 		encodingFunc = func(b []byte) string {
 			return base32.StdEncoding.EncodeToString(b)
 		}
+	case SHA3256Base16:
+		hashFunc = func() any { return sha3.New256() }
+		prefix = "sha3-256:"
+		encodingFunc = hex.EncodeToString
+	case SHA3512Base16:
+		hashFunc = func() any { return sha3.New512() }
+		prefix = "sha3-512:"
+		encodingFunc = hex.EncodeToString
 	case BLAKE3:
 		hashFunc = func() any { return blake3.New() }
 		prefix = "blake3:"
