@@ -92,14 +92,15 @@ func (w *Writer) CloseCompressedWriter() (err error) {
 }
 
 func getNextWarcFileName(outputDir, prefix, compression string, serial *atomic.Uint64) (nextFileName string) {
-	_, err := os.Stat(outputDir + nextFileName)
+	nextFileName = generateWarcFileName(prefix, compression, serial)
+	_, err := os.Stat(path.Join(outputDir, nextFileName))
 	for !errors.Is(err, os.ErrNotExist) {
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			panic(err)
 		}
 
 		nextFileName = generateWarcFileName(prefix, compression, serial)
-		_, err = os.Stat(outputDir + nextFileName)
+		_, err = os.Stat(path.Join(outputDir, nextFileName))
 	}
 
 	return
