@@ -94,6 +94,14 @@ func TestConcurrentGetNextWarcFileName(t *testing.T) {
 		prevSerial = s
 	}
 
+	if serials[0] != 1 {
+		t.Errorf("Expected first serial to be 1, got %d", serials[0])
+	}
+
+	if serials[len(serials)-1] != uint64(goroutines*iterations) {
+		t.Errorf("Expected last serial to be %d, got %d", goroutines*iterations, serials[len(serials)])
+	}
+
 	close(results)
 	close(errors)
 }

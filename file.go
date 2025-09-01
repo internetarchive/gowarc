@@ -27,7 +27,7 @@ func generateWarcFileName(prefix string, compression string, serial *atomic.Uint
 	for {
 		oldSerial := serial.Load()
 		if oldSerial >= 99999 {
-			if serial.CompareAndSwap(oldSerial, 0) {
+			if serial.CompareAndSwap(oldSerial, 1) {
 				newSerial = 1
 				break
 			}
