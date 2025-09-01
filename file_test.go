@@ -3,6 +3,7 @@ package warc
 import (
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 )
@@ -53,4 +54,24 @@ func TestIsFileSizeExceeded(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestGenerateWarcFileName_NoRace(_ *testing.T) {
+	var serial atomic.Uint64
+	var wg sync.WaitGroup
+	iterations := 1000
+	prefix := "test"
+	compression := "GZIP"
+
+	for range 10 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range iterations {
+				_ = generateWarcFileName(prefix, compression, &serial)
+			}
+		}()
+	}
+
+	wg.Wait()
 }

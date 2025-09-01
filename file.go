@@ -18,11 +18,24 @@ func generateWarcFileName(prefix string, compression string, serial *atomic.Uint
 		panic(err)
 	}
 
-	// Don't let serial overflow past 99999, the current maximum with 5 serial digits.
-	serial.CompareAndSwap(99999, 0)
+	var newSerial uint64
+	for {
+		oldSerial := serial.Load()
+		if oldSerial >= 99999 {
+			if serial.CompareAndSwap(oldSerial, 0) {
+				newSerial = 1
+				break
+			}
+		} else {
+			if serial.CompareAndSwap(oldSerial, oldSerial+1) {
+				newSerial = oldSerial + 1
+				break
+			}
+		}
+	}
 
 	// Atomically increase the global serial number
-	formattedSerial := formatSerial(serial.Add(1), "5")
+	formattedSerial := formatSerial(newSerial, "5")
 
 	now := time.Now().UTC()
 	date := now.Format("20060102150405") + strconv.Itoa(now.Nanosecond())[:3]
