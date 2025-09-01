@@ -11,7 +11,7 @@ import (
 
 func TestGetNextWarcFileName(t *testing.T) {
 	var serial atomic.Uint64
-	result := getNextWarcFileName("", "test", "gzip", &serial)
+	result := getNextWARCFilename("", "test", "gzip", &serial)
 	split := []string{"test", "00000", ".warc.gz.open"}
 
 	if strings.Contains(result, split[0]) && strings.Contains(result, split[1]) && strings.Contains(result, split[2]) {
@@ -25,7 +25,7 @@ func TestSequentialGetNextWarcFileName(t *testing.T) {
 	var prevSerial uint64
 
 	for range 100 {
-		result := getNextWarcFileName("", "test", "gzip", &serial)
+		result := getNextWARCFilename("", "test", "gzip", &serial)
 		split := strings.Split(result, "-")
 		if len(split) < 3 {
 			t.Errorf("Unexpected filename format: %s", result)
@@ -57,7 +57,7 @@ func TestConcurrentGetNextWarcFileName(t *testing.T) {
 	for g := 0; g < goroutines; g++ {
 		go func() {
 			for i := 0; i < iterations; i++ {
-				result := getNextWarcFileName("", "test", "gzip", &serial)
+				result := getNextWARCFilename("", "test", "gzip", &serial)
 				results <- result
 			}
 		}()

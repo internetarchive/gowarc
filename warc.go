@@ -91,16 +91,16 @@ func (w *Writer) CloseCompressedWriter() (err error) {
 	return err
 }
 
-func getNextWarcFileName(outputDir, prefix, compression string, serial *atomic.Uint64) (nextFileName string) {
-	nextFileName = generateWarcFileName(prefix, compression, serial)
-	_, err := os.Stat(path.Join(outputDir, nextFileName))
+func getNextWARCFilename(outputDir, prefix, compression string, serial *atomic.Uint64) (nextWARCFilename string) {
+	nextWARCFilename = generateWARCFilename(prefix, compression, serial)
+	_, err := os.Stat(path.Join(outputDir, nextWARCFilename))
 	for !errors.Is(err, os.ErrNotExist) {
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			panic(err)
 		}
 
-		nextFileName = generateWarcFileName(prefix, compression, serial)
-		_, err = os.Stat(path.Join(outputDir, nextFileName))
+		nextWARCFilename = generateWARCFilename(prefix, compression, serial)
+		_, err = os.Stat(path.Join(outputDir, nextWARCFilename))
 	}
 
 	return
@@ -108,7 +108,7 @@ func getNextWarcFileName(outputDir, prefix, compression string, serial *atomic.U
 
 func recordWriter(settings *RotatorSettings, records chan *RecordBatch, done chan bool, serial *atomic.Uint64, dictionary []byte) {
 	var (
-		currentFileName         = getNextWarcFileName(settings.OutputDirectory, settings.Prefix, settings.Compression, serial)
+		currentFileName         = getNextWARCFilename(settings.OutputDirectory, settings.Prefix, settings.Compression, serial)
 		currentWarcinfoRecordID string
 	)
 
@@ -169,7 +169,7 @@ func recordWriter(settings *RotatorSettings, records chan *RecordBatch, done cha
 				}
 
 				// Create the new file and automatically increment the serial inside of GenerateWarcFileName
-				currentFileName = getNextWarcFileName(settings.OutputDirectory, settings.Prefix, settings.Compression, serial)
+				currentFileName = getNextWARCFilename(settings.OutputDirectory, settings.Prefix, settings.Compression, serial)
 				warcFile, err = os.Create(settings.OutputDirectory + currentFileName)
 				if err != nil {
 					panic(err)

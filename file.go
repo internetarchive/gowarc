@@ -9,19 +9,18 @@ import (
 	"time"
 )
 
-// GenerateWarcFileName generate a WARC file name following recommendations
-// of the specs:
+// generateWARCFilename generate a WARC file name following recommendations of the specs:
 // Prefix-Timestamp-Serial-Crawlhost.warc.gz
-func generateWarcFileName(prefix string, compression string, serial *atomic.Uint64) string {
+func generateWARCFilename(prefix string, compression string, serial *atomic.Uint64) string {
 	// Get host name as reported by the kernel
-	var fileName strings.Builder
+	var filename strings.Builder
 
-	fileName.WriteString(prefix)
-	fileName.WriteString("-")
+	filename.WriteString(prefix)
+	filename.WriteString("-")
 
 	now := time.Now().UTC()
-	fileName.WriteString(now.Format("20060102150405") + strconv.Itoa(now.Nanosecond())[:3])
-	fileName.WriteString("-")
+	filename.WriteString(now.Format("20060102150405") + strconv.Itoa(now.Nanosecond())[:3])
+	filename.WriteString("-")
 
 	var newSerial uint64
 	for {
@@ -38,14 +37,14 @@ func generateWarcFileName(prefix string, compression string, serial *atomic.Uint
 			}
 		}
 	}
-	fileName.WriteString(formatSerial(newSerial, "5"))
-	fileName.WriteString("-")
+	filename.WriteString(formatSerial(newSerial, "5"))
+	filename.WriteString("-")
 
 	hostName, err := os.Hostname()
 	if err != nil {
 		panic(err)
 	}
-	fileName.WriteString(hostName)
+	filename.WriteString(hostName)
 
 	var fileExt string
 	switch strings.ToLower(compression) {
@@ -57,9 +56,9 @@ func generateWarcFileName(prefix string, compression string, serial *atomic.Uint
 		fileExt = ".warc.open"
 	}
 
-	fileName.WriteString(fileExt)
+	filename.WriteString(fileExt)
 
-	return fileName.String()
+	return filename.String()
 }
 
 // formatSerial add the correct padding to the serial
