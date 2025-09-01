@@ -3,11 +3,7 @@ package warc
 import (
 	"bufio"
 	"bytes"
-	"crypto/sha1"
-	"crypto/sha256"
-	"encoding/base32"
 	"encoding/binary"
-	"encoding/hex"
 	"errors"
 	"io"
 	"os"
@@ -19,33 +15,6 @@ import (
 
 	"github.com/klauspost/compress/zstd"
 )
-
-func GetSHA1(r io.Reader) string {
-	sha := sha1.New()
-	_, err := io.Copy(sha, r)
-	if err != nil {
-		return "ERROR: " + err.Error()
-	}
-	return base32.StdEncoding.EncodeToString(sha.Sum(nil))
-}
-
-func GetSHA256(r io.Reader) string {
-	sha := sha256.New()
-	_, err := io.Copy(sha, r)
-	if err != nil {
-		return "ERROR: " + err.Error()
-	}
-	return base32.StdEncoding.EncodeToString(sha.Sum(nil))
-}
-
-func GetSHA256Base16(r io.Reader) string {
-	sha := sha256.New()
-	_, err := io.Copy(sha, r)
-	if err != nil {
-		return "ERROR: " + err.Error()
-	}
-	return hex.EncodeToString(sha.Sum(nil))
-}
 
 // splitKeyValue parses WARC record header fields.
 func splitKeyValue(line string) (string, string) {
@@ -73,18 +42,20 @@ func isHTTPRequest(line string) bool {
 }
 
 // NewWriter creates a new WARC writer.
-func NewWriter(writer io.Writer, fileName string, compression string, contentLengthHeader string, newFileCreation bool, dictionary []byte) (*Writer, error) {
+func NewWriter(writer io.Writer, fileName string, digestAlgorithm DigestAlgorithm, compression string, contentLengthHeader string, newFileCreation bool, dictionary []byte) (*Writer, error) {
 	if compression != "" {
-		if compression == "GZIP" {
+		switch compression {
+		case "GZIP":
 			gzipWriter := gzip.NewWriter(writer)
 
 			return &Writer{
-				FileName:    fileName,
-				Compression: compression,
-				GZIPWriter:  gzipWriter,
-				FileWriter:  bufio.NewWriter(gzipWriter),
+				FileName:        fileName,
+				Compression:     compression,
+				DigestAlgorithm: digestAlgorithm,
+				GZIPWriter:      gzipWriter,
+				FileWriter:      bufio.NewWriter(gzipWriter),
 			}, nil
-		} else if compression == "ZSTD" {
+		case "ZSTD":
 			if newFileCreation && len(dictionary) > 0 {
 				dictionaryZstdwriter, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedBetterCompression))
 				if err != nil {
@@ -120,10 +91,11 @@ func NewWriter(writer io.Writer, fileName string, compression string, contentLen
 					return nil, err
 				}
 				return &Writer{
-					FileName:    fileName,
-					Compression: compression,
-					ZSTDWriter:  zstdWriter,
-					FileWriter:  bufio.NewWriter(zstdWriter),
+					FileName:        fileName,
+					Compression:     compression,
+					DigestAlgorithm: digestAlgorithm,
+					ZSTDWriter:      zstdWriter,
+					FileWriter:      bufio.NewWriter(zstdWriter),
 				}, nil
 			} else {
 				zstdWriter, err := zstd.NewWriter(writer, zstd.WithEncoderLevel(zstd.SpeedBetterCompression))
@@ -131,20 +103,23 @@ func NewWriter(writer io.Writer, fileName string, compression string, contentLen
 					return nil, err
 				}
 				return &Writer{
-					FileName:    fileName,
-					Compression: compression,
-					ZSTDWriter:  zstdWriter,
-					FileWriter:  bufio.NewWriter(zstdWriter),
+					FileName:        fileName,
+					Compression:     compression,
+					DigestAlgorithm: digestAlgorithm,
+					ZSTDWriter:      zstdWriter,
+					FileWriter:      bufio.NewWriter(zstdWriter),
 				}, nil
 			}
+		default:
+			return nil, errors.New("invalid compression algorithm: " + compression)
 		}
-		return nil, errors.New("invalid compression algorithm: " + compression)
 	}
 
 	return &Writer{
-		FileName:    fileName,
-		Compression: "",
-		FileWriter:  bufio.NewWriter(writer),
+		FileName:        fileName,
+		Compression:     "",
+		DigestAlgorithm: digestAlgorithm,
+		FileWriter:      bufio.NewWriter(writer),
 	}, nil
 }
 
@@ -170,8 +145,9 @@ func NewRotatorSettings() *RotatorSettings {
 	return &RotatorSettings{
 		WarcinfoContent:       NewHeader(),
 		Prefix:                "WARC",
-		WarcSize:              1000,
+		WARCSize:              1000,
 		Compression:           "GZIP",
+		digestAlgorithm:       SHA1,
 		CompressionDictionary: "",
 		OutputDirectory:       "./",
 	}
@@ -216,8 +192,8 @@ func checkRotatorSettings(settings *RotatorSettings) (err error) {
 	}
 
 	// If WARC size isn't specified, set it to 1GB (10^9 bytes) by default
-	if settings.WarcSize == 0 {
-		settings.WarcSize = 1000
+	if settings.WARCSize == 0 {
+		settings.WARCSize = 1000
 	}
 
 	// Check if the specified compression algorithm is valid

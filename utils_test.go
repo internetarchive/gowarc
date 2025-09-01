@@ -1,35 +1,8 @@
 package warc
 
 import (
-	"bytes"
 	"testing"
 )
-
-// Tests for the GetSHA1 function
-func TestGetSHA1(t *testing.T) {
-	helloWorldSHA1 := "FKXGYNOJJ7H3IFO35FPUBC445EPOQRXN"
-
-	if GetSHA1(bytes.NewReader([]byte("hello world"))) != helloWorldSHA1 {
-		t.Error("Failed to generate SHA1 with GetSHA1")
-	}
-}
-
-// Tests for the GetSHA256 function
-func TestGetSHA256(t *testing.T) {
-	helloWorldSHA256 := "XFGSPOMTJU7ARJJOKLL5U7NL7LCIJ37DPJJYB3UQRD32ZYXPZXUQ===="
-
-	if GetSHA256(bytes.NewReader([]byte("hello world"))) != helloWorldSHA256 {
-		t.Error("Failed to generate SHA256 with GetSHA256")
-	}
-}
-
-func TestGetSHA256Base16(t *testing.T) {
-	helloWorldSHA256Base16 := "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
-
-	if GetSHA256Base16(bytes.NewReader([]byte("hello world"))) != helloWorldSHA256Base16 {
-		t.Error("Failed to generate SHA256Base16 with GetSHA256Base16")
-	}
-}
 
 // Tests for the NewRotatorSettings function
 func TestNewRotatorSettings(t *testing.T) {
@@ -39,7 +12,7 @@ func TestNewRotatorSettings(t *testing.T) {
 		t.Error("Failed to set WARC rotator's filename prefix")
 	}
 
-	if rotatorSettings.WarcSize != 1000 {
+	if rotatorSettings.WARCSize != 1000 {
 		t.Error("Failed to set WARC rotator's WARC size")
 	}
 

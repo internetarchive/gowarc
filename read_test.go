@@ -3,7 +3,6 @@ package warc
 import (
 	"bufio"
 	"bytes"
-	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -36,7 +35,11 @@ func testFileHash(t *testing.T, path string) {
 			break
 		}
 
-		hash := fmt.Sprintf("sha1:%s", GetSHA1(record.Content))
+		hash, err := GetDigest(record.Content, SHA1)
+		if err != nil {
+			t.Fatalf("failed to get digest: %v", err)
+		}
+
 		if hash != record.Header["WARC-Block-Digest"] {
 			err = record.Content.Close()
 			if err != nil {
@@ -157,7 +160,11 @@ func testFileSingleHashCheck(t *testing.T, path string, hash string, expectedCon
 			defer resp.Body.Close()
 			defer record.Content.Seek(0, 0)
 
-			calculatedRecordHash := fmt.Sprintf("sha1:%s", GetSHA1(resp.Body))
+			calculatedRecordHash, err := GetDigest(resp.Body, SHA1)
+			if err != nil {
+				t.Fatalf("failed to get digest: %v", err)
+			}
+
 			if record.Header.Get("WARC-Payload-Digest") != calculatedRecordHash {
 				err = record.Content.Close()
 				if err != nil {
@@ -340,6 +347,39 @@ func TestReader(t *testing.T) {
 	}
 }
 
+func TestReaderNoContentOpt(t *testing.T) {
+	var paths = []string{
+		"testdata/test.warc.gz",
+	}
+	for _, path := range paths {
+		file, err := os.Open(path)
+		if err != nil {
+			t.Fatalf("failed to open %q: %v", path, err)
+		}
+		defer file.Close()
+
+		reader, err := NewReader(file)
+		if err != nil {
+			t.Fatalf("warc.NewReader failed for %q: %v", path, err)
+		}
+
+		for {
+			record, eol, err := reader.ReadRecord(ReadOptsNoContentOutput)
+			if eol {
+				break
+			}
+			if err != nil {
+				t.Fatalf("failed to read all record content: %v", err)
+				break
+			}
+
+			if record.Content.Len() > 0 {
+				t.Fatal("expected no content, got content")
+			}
+		}
+	}
+}
+
 func BenchmarkBasicRead(b *testing.B) {
 	// default test warc location
 	path := "testdata/test.warc.gz"
@@ -368,7 +408,12 @@ func BenchmarkBasicRead(b *testing.B) {
 				break
 			}
 
-			hash := fmt.Sprintf("sha1:%s", GetSHA1(record.Content))
+			hash, err := GetDigest(record.Content, SHA1)
+			if err != nil {
+				b.Fatalf("failed to get digest: %v", err)
+				break
+			}
+
 			if hash != record.Header["WARC-Block-Digest"] {
 				err = record.Content.Close()
 				if err != nil {

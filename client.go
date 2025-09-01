@@ -37,6 +37,7 @@ type HTTPClientSettings struct {
 	DisableIPv4           bool
 	DisableIPv6           bool
 	IPv6AnyIP             bool
+	DigestAlgorithm       DigestAlgorithm
 }
 
 type CustomHTTPClient struct {
@@ -56,6 +57,7 @@ type CustomHTTPClient struct {
 	MaxReadBeforeTruncate  int
 	verifyCerts            bool
 	FullOnDisk             bool
+	DigestAlgorithm        DigestAlgorithm
 	closeDNSCache          func()
 	// MaxRAMUsageFraction is the fraction of system RAM above which we'll force spooling to disk. For example, 0.5 = 50%.
 	// If set to <= 0, the default value is DefaultMaxRAMUsageFraction.
@@ -122,6 +124,10 @@ func NewWARCWritingHTTPClient(HTTPClientSettings HTTPClientSettings) (httpClient
 		go httpClient.getAvailableIPs(HTTPClientSettings.IPv6AnyIP)
 		<-httpClient.interfacesWatcherStarted
 	}
+
+	// Set block and payload digest algorithm (it's important to set that before we configure the WARC writer)
+	httpClient.DigestAlgorithm = HTTPClientSettings.DigestAlgorithm
+	HTTPClientSettings.RotatorSettings.digestAlgorithm = HTTPClientSettings.DigestAlgorithm
 
 	// Toggle deduplication options and create map for deduplication records.
 	httpClient.dedupeOptions = HTTPClientSettings.DedupeOptions

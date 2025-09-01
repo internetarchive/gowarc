@@ -35,7 +35,12 @@ type customDialer struct {
 	disableIPv6 bool
 }
 
-var emptyPayloadDigest = "3I42H3S6NNFQ2MSVX7XZKYAYSCX5QBYJ"
+var emptyPayloadDigests = []string{
+	"sha1:3I42H3S6NNFQ2MSVX7XZKYAYSCX5QBYJ",
+	"sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+	"sha256:4OYMIQUY7QOBJGX36TEJS35ZEQT24QPEMSNZGTFESWMRW6CSXBKQ====",
+	"blake3:af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262",
+}
 
 func newCustomDialer(httpClient *CustomHTTPClient, proxyURL string, DialTimeout, DNSRecordsTTL, DNSResolutionTimeout time.Duration, DNSCacheSize int, DNSServers []string, disableIPv4, disableIPv6 bool) (d *customDialer, err error) {
 	d = new(customDialer)
@@ -245,10 +250,10 @@ func (d *customDialer) CustomDialTLSContext(ctx context.Context, network, addres
 		return nil, err
 	}
 
-	cfg := new(tls.Config)
-	serverName := address[:strings.LastIndex(address, ":")]
-	cfg.ServerName = serverName
-	cfg.InsecureSkipVerify = d.client.verifyCerts
+	cfg := &tls.Config{
+		ServerName:         address[:strings.LastIndex(address, ":")],
+		InsecureSkipVerify: d.client.verifyCerts,
+	}
 
 	tlsConn := tls.UClient(plainConn, cfg, tls.HelloCustom)
 
@@ -256,23 +261,15 @@ func (d *customDialer) CustomDialTLSContext(ctx context.Context, network, addres
 		return nil, err
 	}
 
-	errc := make(chan error, 2)
-	timer := time.AfterFunc(d.client.TLSHandshakeTimeout, func() {
-		errc <- errors.New("TLS handshake timeout")
-	})
+	handshakeCtx, cancel := context.WithTimeout(ctx, d.client.TLSHandshakeTimeout)
+	defer cancel()
 
-	go func() {
-		err := tlsConn.HandshakeContext(ctx)
-		timer.Stop()
-		errc <- err
-	}()
-	if err := <-errc; err != nil {
+	if err := tlsConn.HandshakeContext(handshakeCtx); err != nil {
 		closeErr := plainConn.Close()
 		if closeErr != nil {
 			return nil, fmt.Errorf("CustomDialTLS: TLS handshake failed and closing plain connection failed: %s", closeErr.Error())
 		}
-
-		return nil, err
+		return nil, fmt.Errorf("CustomDialTLS: TLS handshake failed: %w", err)
 	}
 
 	return d.wrapConnection(ctx, tlsConn, "https"), nil
@@ -438,11 +435,20 @@ func (d *customDialer) writeWARCFromConnection(ctx context.Context, reqPipe, res
 				return
 			}
 
-			r.Header.Set("WARC-Block-Digest", "sha1:"+GetSHA1(r.Content))
+			digest, err := GetDigest(r.Content, d.client.DigestAlgorithm)
+			if err != nil {
+				d.client.ErrChan <- &Error{
+					Err:  err,
+					Func: "writeWARCFromConnection",
+				}
+				return
+			}
+
+			r.Header.Set("WARC-Block-Digest", digest)
 			r.Header.Set("Content-Length", strconv.Itoa(getContentLength(r.Content)))
 
 			if d.client.dedupeOptions.LocalDedupe {
-				if r.Header.Get("WARC-Type") == "response" && r.Header.Get("WARC-Payload-Digest")[5:] != emptyPayloadDigest {
+				if r.Header.Get("WARC-Type") == "response" && !slices.Contains(emptyPayloadDigests, r.Header.Get("WARC-Payload-Digest")) {
 					captureTime, timeConversionErr := time.Parse(time.RFC3339, batch.CaptureTime)
 					if timeConversionErr != nil {
 						d.client.ErrChan <- &Error{
@@ -451,7 +457,7 @@ func (d *customDialer) writeWARCFromConnection(ctx context.Context, reqPipe, res
 						}
 						return
 					}
-					d.client.dedupeHashTable.Store(r.Header.Get("WARC-Payload-Digest")[5:], revisitRecord{
+					d.client.dedupeHashTable.Store(r.Header.Get("WARC-Payload-Digest"), revisitRecord{
 						responseUUID: recordIDs[i],
 						size:         getContentLength(r.Content),
 						targetURI:    warcTargetURI,
@@ -519,22 +525,21 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 	}
 
 	// Calculate the WARC-Payload-Digest
-	payloadDigest := GetSHA1(resp.Body)
-	if strings.HasPrefix(payloadDigest, "ERROR: ") {
-		// This should _never_ happen.
-		return fmt.Errorf("readResponse: SHA1 ran into an unrecoverable error: %s url: %s", payloadDigest, warcTargetURI)
+	payloadDigest, err := GetDigest(resp.Body, d.client.DigestAlgorithm)
+	if err != nil {
+		return fmt.Errorf("readResponse: payload digest calculation failed: %s", err.Error())
 	}
 
 	err = resp.Body.Close()
 	if err != nil {
-		return fmt.Errorf("readResponse: closing body after SHA1 calculation failed: %s", err.Error())
+		return fmt.Errorf("readResponse: closing body after digest calculation failed: %s", err.Error())
 	}
 
-	responseRecord.Header.Set("WARC-Payload-Digest", "sha1:"+payloadDigest)
+	responseRecord.Header.Set("WARC-Payload-Digest", payloadDigest)
 
 	// Write revisit record if local, CDX, or Doppelganger dedupe is activated and finds match.
 	var revisit = revisitRecord{}
-	if bytesCopied >= int64(d.client.dedupeOptions.SizeThreshold) && payloadDigest != emptyPayloadDigest {
+	if bytesCopied >= int64(d.client.dedupeOptions.SizeThreshold) && !slices.Contains(emptyPayloadDigests, payloadDigest) {
 		if d.client.dedupeOptions.LocalDedupe {
 			revisit = d.checkLocalRevisit(payloadDigest)
 			if revisit.targetURI != "" {
@@ -544,7 +549,8 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 		}
 
 		// If local dedupe does not find anything, we will check Doppelganger (if set) then CDX (if set).
-		if d.client.dedupeOptions.DoppelgangerDedupe && revisit.targetURI == "" {
+		// TODO: Latest doppelganger dev branch does not support anything other than SHA1. This will be modified later.
+		if d.client.dedupeOptions.DoppelgangerDedupe && d.client.DigestAlgorithm == SHA1 && revisit.targetURI == "" {
 			revisit, _ = checkDoppelgangerRevisit(d.client.dedupeOptions.DoppelgangerHost, payloadDigest, warcTargetURI)
 			if revisit.targetURI != "" {
 				DoppelgangerDedupeTotalBytes.Add(bytesCopied)
@@ -552,7 +558,8 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 			}
 		}
 
-		if d.client.dedupeOptions.CDXDedupe && revisit.targetURI == "" {
+		// IA CDX dedupe does not support anything other than SHA1 at the moment. We should add a flag to support more.
+		if d.client.dedupeOptions.CDXDedupe && d.client.DigestAlgorithm == SHA1 && revisit.targetURI == "" {
 			revisit, _ = checkCDXRevisit(d.client.dedupeOptions.CDXURL, payloadDigest, warcTargetURI, d.client.dedupeOptions.CDXCookie)
 			if revisit.targetURI != "" {
 				CDXDedupeTotalBytes.Add(bytesCopied)
@@ -561,7 +568,7 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 		}
 	}
 
-	if revisit.targetURI != "" && payloadDigest != emptyPayloadDigest {
+	if revisit.targetURI != "" && !slices.Contains(emptyPayloadDigests, payloadDigest) {
 		responseRecord.Header.Set("WARC-Type", "revisit")
 		responseRecord.Header.Set("WARC-Refers-To-Target-URI", revisit.targetURI)
 		responseRecord.Header.Set("WARC-Refers-To-Date", revisit.date.Format(time.RFC3339Nano))
@@ -574,60 +581,10 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 		responseRecord.Header.Set("WARC-Truncated", "length")
 
 		// Find the position of the end of the headers
-		_, err := responseRecord.Content.Seek(0, 0)
+		endOfHeadersOffset, err := findEndOfHeadersOffset(responseRecord.Content)
 		if err != nil {
-			return fmt.Errorf("readResponse: could not seek to the beginning of the content: %s", err.Error())
+			return fmt.Errorf("readResponse: %s", err.Error())
 		}
-
-		found := false
-		bigBlock := make([]byte, 0, 4)
-		block := make([]byte, 1)
-		endOfHeadersOffset := 0
-		for {
-			n, err := responseRecord.Content.Read(block)
-			if n > 0 {
-				switch len(bigBlock) {
-				case 0:
-					if string(block) == "\r" {
-						bigBlock = append(bigBlock, block...)
-					}
-				case 1:
-					if string(block) == "\n" {
-						bigBlock = append(bigBlock, block...)
-					} else {
-						bigBlock = nil
-					}
-				case 2:
-					if string(block) == "\r" {
-						bigBlock = append(bigBlock, block...)
-					} else {
-						bigBlock = nil
-					}
-				case 3:
-					if string(block) == "\n" {
-						bigBlock = append(bigBlock, block...)
-						found = true
-					} else {
-						bigBlock = nil
-					}
-				}
-
-				endOfHeadersOffset++
-
-				if found {
-					break
-				}
-			}
-
-			if err == io.EOF {
-				break
-			}
-
-			if err != nil {
-				return err
-			}
-		}
-
 		// This should really never happen! This could be the result of a malfunctioning HTTP server or something currently unknown!
 		if endOfHeadersOffset == -1 {
 			return errors.New("readResponse: could not find the end of the headers")
@@ -635,7 +592,7 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 
 		// Write the data up until the end of the headers to a temporary buffer
 		tempBuffer := spooledtempfile.NewSpooledTempFile("warc", d.client.TempDir, -1, d.client.FullOnDisk, d.client.MaxRAMUsageFraction)
-		block = make([]byte, 1)
+		block := make([]byte, 1)
 		wrote := 0
 		responseRecord.Content.Seek(0, 0)
 		for {
@@ -671,6 +628,70 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 	}
 
 	return nil
+}
+
+// Scan a ReadSeeker for the sequence \r\n\r\n and return the offset just after it
+func findEndOfHeadersOffset(content io.ReadSeeker) (int, error) {
+	// Ensure reader is at the beginning
+	if _, err := content.Seek(0, io.SeekStart); err != nil {
+		return -1, fmt.Errorf("FindEndOfHeadersOffset: seek failed: %w", err)
+	}
+
+	found := false
+	bigBlock := make([]byte, 0, 4)
+	block := make([]byte, 1)
+	endOfHeadersOffset := 0
+
+	for {
+		n, err := content.Read(block)
+		if n > 0 {
+			switch len(bigBlock) {
+			case 0:
+				if string(block) == "\r" {
+					bigBlock = append(bigBlock, block...)
+				}
+			case 1:
+				if string(block) == "\n" {
+					bigBlock = append(bigBlock, block...)
+				} else {
+					bigBlock = nil
+				}
+			case 2:
+				if string(block) == "\r" {
+					bigBlock = append(bigBlock, block...)
+				} else {
+					bigBlock = nil
+				}
+			case 3:
+				if string(block) == "\n" {
+					bigBlock = append(bigBlock, block...)
+					found = true
+				} else {
+					bigBlock = nil
+				}
+			}
+
+			endOfHeadersOffset++
+
+			if found {
+				break
+			}
+		}
+
+		if err == io.EOF {
+			break
+		}
+
+		if err != nil {
+			return -1, err
+		}
+	}
+
+	if !found {
+		return -1, errors.New("FindEndOfHeadersOffset: could not find the end of the headers")
+	}
+
+	return endOfHeadersOffset, nil
 }
 
 func parseRequestTargetURI(scheme string, content io.ReadSeeker) (string, error) {
