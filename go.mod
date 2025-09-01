@@ -7,7 +7,7 @@ require (
 	github.com/klauspost/compress v1.18.0
 	github.com/maypok86/otter v1.2.4
 	github.com/miekg/dns v1.1.65
-	github.com/refraction-networking/utls v1.6.7
+	github.com/refraction-networking/utls v1.7.0
 	github.com/remeh/sizedwaitgroup v1.0.0
 	github.com/spf13/cobra v1.9.1
 	github.com/things-go/go-socks5 v0.0.6
