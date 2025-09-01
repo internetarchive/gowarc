@@ -8,6 +8,18 @@ import (
 	"strings"
 )
 
+// Overridable in tests:
+var (
+	cgv2UsagePath = "/sys/fs/cgroup/memory.current"
+	cgv2HighPath  = "/sys/fs/cgroup/memory.high"
+	cgv2MaxPath   = "/sys/fs/cgroup/memory.max"
+
+	cgv1UsagePath = "/sys/fs/cgroup/memory/memory.usage_in_bytes"
+	cgv1LimitPath = "/sys/fs/cgroup/memory/memory.limit_in_bytes"
+
+	procMeminfoPath = "/proc/meminfo"
+)
+
 // getSystemMemoryUsedFraction returns used/limit for the container if
 // cgroup limits are set; otherwise falls back to host /proc/meminfo.
 var getSystemMemoryUsedFraction = func() (float64, error) {
@@ -30,51 +42,66 @@ var getSystemMemoryUsedFraction = func() (float64, error) {
 }
 
 func cgroupV2UsedFraction() (frac float64, ok bool, err error) {
-	// Common modern path with systemd/docker/containerd/Nomad on cgroup v2
-	const (
-		usagePath = "/sys/fs/cgroup/memory.current"
-		limitPath = "/sys/fs/cgroup/memory.max"
-	)
+	usage, uok, err := readUint64FileIfExists(cgv2UsagePath)
+	if err != nil {
+		return 0, false, err
+	}
+	if !uok {
+		return 0, false, nil // not cgroup v2 (or not accessible)
+	}
 
-	usage, uok, err := readUint64FileIfExists(usagePath)
+	// Try memory.high first
+	highStr, hok, err := readStringFileIfExists(cgv2HighPath)
 	if err != nil {
 		return 0, false, err
 	}
 
-	limitStr, lok, err := readStringFileIfExists(limitPath)
+	var high, max uint64
+	var haveHigh bool
+	if hok {
+		hs := strings.TrimSpace(highStr)
+		if hs != "" && hs != "max" {
+			if v, e := strconv.ParseUint(hs, 10, 64); e == nil && v > 0 {
+				high, haveHigh = v, true
+			}
+		}
+	}
+
+	// Always read memory.max as fallback (and for sanity checks)
+	maxStr, mok, err := readStringFileIfExists(cgv2MaxPath)
 	if err != nil {
 		return 0, false, err
 	}
-	if !uok || !lok {
-		return 0, false, nil // not v2 (or not accessible)
+	var haveMax bool
+	if mok {
+		ms := strings.TrimSpace(maxStr)
+		if ms != "" && ms != "max" {
+			if v, e := strconv.ParseUint(ms, 10, 64); e == nil && v > 0 {
+				max, haveMax = v, true
+			}
+		}
 	}
 
-	limitStr = strings.TrimSpace(limitStr)
-	if limitStr == "max" || limitStr == "" {
-		// No effective limit -> not useful for container fraction
-		return 0, false, nil
+	// Choose denominator: prefer valid 'high' unless it is >= max.
+	switch {
+	case haveHigh && haveMax && high < max:
+		return float64(usage) / float64(high), true, nil
+	case haveMax:
+		return float64(usage) / float64(max), true, nil
+	case haveHigh:
+		return float64(usage) / float64(high), true, nil
+	default:
+		return 0, false, nil // no effective limit
 	}
-
-	limit, err := strconv.ParseUint(limitStr, 10, 64)
-	if err != nil || limit == 0 {
-		return 0, false, nil
-	}
-
-	return float64(usage) / float64(limit), true, nil
 }
 
 func cgroupV1UsedFraction() (frac float64, ok bool, err error) {
-	const (
-		usagePath = "/sys/fs/cgroup/memory/memory.usage_in_bytes"
-		limitPath = "/sys/fs/cgroup/memory/memory.limit_in_bytes"
-	)
-
-	usage, uok, err := readUint64FileIfExists(usagePath)
+	usage, uok, err := readUint64FileIfExists(cgv1UsagePath)
 	if err != nil {
 		return 0, false, err
 	}
 
-	limit, lok, err := readUint64FileIfExists(limitPath)
+	limit, lok, err := readUint64FileIfExists(cgv1LimitPath)
 	if err != nil {
 		return 0, false, err
 	}
@@ -91,7 +118,7 @@ func cgroupV1UsedFraction() (frac float64, ok bool, err error) {
 }
 
 func hostMeminfoUsedFraction() (float64, error) {
-	f, err := os.Open("/proc/meminfo")
+	f, err := os.Open(procMeminfoPath)
 	if err != nil {
 		return 0, fmt.Errorf("failed to open /proc/meminfo: %v", err)
 	}
