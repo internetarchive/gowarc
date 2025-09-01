@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 )
@@ -11,12 +12,16 @@ import (
 // GenerateWarcFileName generate a WARC file name following recommendations
 // of the specs:
 // Prefix-Timestamp-Serial-Crawlhost.warc.gz
-func generateWarcFileName(prefix string, compression string, serial *atomic.Uint64) (fileName string) {
+func generateWarcFileName(prefix string, compression string, serial *atomic.Uint64) string {
 	// Get host name as reported by the kernel
-	hostName, err := os.Hostname()
-	if err != nil {
-		panic(err)
-	}
+	var fileName strings.Builder
+
+	fileName.WriteString(prefix)
+	fileName.WriteString("-")
+
+	now := time.Now().UTC()
+	fileName.WriteString(now.Format("20060102150405") + strconv.Itoa(now.Nanosecond())[:3])
+	fileName.WriteString("-")
 
 	var newSerial uint64
 	for {
@@ -33,24 +38,28 @@ func generateWarcFileName(prefix string, compression string, serial *atomic.Uint
 			}
 		}
 	}
+	fileName.WriteString(formatSerial(newSerial, "5"))
+	fileName.WriteString("-")
 
-	// Atomically increase the global serial number
-	formattedSerial := formatSerial(newSerial, "5")
-
-	now := time.Now().UTC()
-	date := now.Format("20060102150405") + strconv.Itoa(now.Nanosecond())[:3]
+	hostName, err := os.Hostname()
+	if err != nil {
+		panic(err)
+	}
+	fileName.WriteString(hostName)
 
 	var fileExt string
-	switch compression {
-	case "GZIP":
+	switch strings.ToLower(compression) {
+	case "gzip":
 		fileExt = ".warc.gz.open"
-	case "ZSTD":
+	case "zstd":
 		fileExt = ".warc.zst.open"
 	default:
 		fileExt = ".warc.open"
 	}
 
-	return prefix + "-" + date + "-" + formattedSerial + "-" + hostName + fileExt
+	fileName.WriteString(fileExt)
+
+	return fileName.String()
 }
 
 // formatSerial add the correct padding to the serial
