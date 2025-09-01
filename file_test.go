@@ -56,6 +56,7 @@ func TestIsFileSizeExceeded(t *testing.T) {
 	}
 }
 
+// to be run with -race flag
 func TestGenerateWarcFileName_NoRace(_ *testing.T) {
 	var serial atomic.Uint64
 	var wg sync.WaitGroup
@@ -63,15 +64,19 @@ func TestGenerateWarcFileName_NoRace(_ *testing.T) {
 	prefix := "test"
 	compression := "GZIP"
 
+	start := make(chan struct{})
+
 	for range 10 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			<-start
 			for range iterations {
 				_ = generateWarcFileName(prefix, compression, &serial)
 			}
 		}()
 	}
 
+	close(start)
 	wg.Wait()
 }
