@@ -27,7 +27,7 @@ const (
 	envDecompressedBufSize  = "WARCDecompressedBufSize"    // in bytes; defines the bufio reader used by the decompression layer; if not set, defaults to defaultDecompressedSize (256 KiB)
 	envZstdDecoderConc      = "WARCZstdDecoderConcurrency" // >1 enables parallel Zstd decode ; if not set, defaults to defaultZstdDecoderConc (1)
 	defaultZstdDecoderConc  = 1                            // default Zstd decoder concurrency (1 == no parallelism)
-	defaultDecompressedSize = 256 << 10                    // 256 KiB is a good gzip/zstd sweet spot
+	defaultDecompressedSize = 256 << 10                    // in bytes; defines the default bufReader buffer size; 256 KiB is a good gzip/zstd sweet spot
 )
 
 // Reader stores the bufio.Reader and gzip.Reader for a WARC file
