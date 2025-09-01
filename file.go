@@ -28,11 +28,12 @@ func generateWarcFileName(prefix string, compression string, serial *atomic.Uint
 	date := now.Format("20060102150405") + strconv.Itoa(now.Nanosecond())[:3]
 
 	var fileExt string
-	if compression == "GZIP" {
+	switch compression {
+	case "GZIP":
 		fileExt = ".warc.gz.open"
-	} else if compression == "ZSTD" {
+	case "ZSTD":
 		fileExt = ".warc.zst.open"
-	} else {
+	default:
 		fileExt = ".warc.open"
 	}
 
