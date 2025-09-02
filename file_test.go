@@ -3,14 +3,15 @@ package warc
 import (
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 )
 
-func TestGenerateWarcFileName(t *testing.T) {
+func TestGenerateWARCFilename(t *testing.T) {
 	serial := &atomic.Uint64{}
 	serial.Store(5)
-	fname1 := generateWarcFileName("youtube", "GZIP", serial)
+	fname1 := generateWARCFilename("youtube", "GZIP", serial)
 	if !strings.HasSuffix(fname1, ".warc.gz.open") {
 		t.Errorf("expected filename suffix: .warc.gz.open, got: %v", fname1)
 	}
@@ -53,4 +54,29 @@ func TestIsFileSizeExceeded(t *testing.T) {
 			}
 		})
 	}
+}
+
+// to be run with -race flag
+func TestGenerateWARCFilename_NoRace(_ *testing.T) {
+	var serial atomic.Uint64
+	var wg sync.WaitGroup
+	iterations := 1000
+	prefix := "test"
+	compression := "GZIP"
+
+	start := make(chan struct{})
+
+	for range 10 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			for range iterations {
+				_ = generateWARCFilename(prefix, compression, &serial)
+			}
+		}()
+	}
+
+	close(start)
+	wg.Wait()
 }

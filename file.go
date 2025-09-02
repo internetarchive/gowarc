@@ -4,39 +4,60 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 )
 
-// GenerateWarcFileName generate a WARC file name following recommendations
-// of the specs:
+// generateWARCFilename generate a WARC file name following recommendations of the specs:
 // Prefix-Timestamp-Serial-Crawlhost.warc.gz
-func generateWarcFileName(prefix string, compression string, serial *atomic.Uint64) (fileName string) {
-	// Get host name as reported by the kernel
+func generateWARCFilename(prefix string, compression string, serial *atomic.Uint64) string {
+	var filename strings.Builder
+
+	filename.WriteString(prefix)
+	filename.WriteString("-")
+
+	now := time.Now().UTC()
+	filename.WriteString(now.Format("20060102150405") + strconv.Itoa(now.Nanosecond())[:3])
+	filename.WriteString("-")
+
+	var newSerial uint64
+	for {
+		oldSerial := serial.Load()
+		if oldSerial >= 99999 {
+			if serial.CompareAndSwap(oldSerial, 1) {
+				newSerial = 1
+				break
+			}
+		} else {
+			if serial.CompareAndSwap(oldSerial, oldSerial+1) {
+				newSerial = oldSerial + 1
+				break
+			}
+		}
+	}
+	filename.WriteString(formatSerial(newSerial, "5"))
+	filename.WriteString("-")
+
 	hostName, err := os.Hostname()
 	if err != nil {
 		panic(err)
 	}
-
-	// Don't let serial overflow past 99999, the current maximum with 5 serial digits.
-	serial.CompareAndSwap(99999, 0)
-
-	// Atomically increase the global serial number
-	formattedSerial := formatSerial(serial.Add(1), "5")
-
-	now := time.Now().UTC()
-	date := now.Format("20060102150405") + strconv.Itoa(now.Nanosecond())[:3]
+	filename.WriteString(hostName)
 
 	var fileExt string
-	if compression == "GZIP" {
+	switch strings.ToLower(compression) {
+	case "gzip":
 		fileExt = ".warc.gz.open"
-	} else if compression == "ZSTD" {
+	case "zstd":
 		fileExt = ".warc.zst.open"
-	} else {
+	default:
 		fileExt = ".warc.open"
 	}
 
-	return prefix + "-" + date + "-" + formattedSerial + "-" + hostName + fileExt
+	filename.WriteString(fileExt)
+
+	return filename.String()
 }
 
 // formatSerial add the correct padding to the serial
