@@ -23,21 +23,19 @@ var (
 // getSystemMemoryUsedFraction returns used/limit for the container if
 // cgroup limits are set; otherwise falls back to host /proc/meminfo.
 var getSystemMemoryUsedFraction = func() (float64, error) {
-	// 1) Try cgroup v2 (unified hierarchy)
-	if frac, ok, err := cgroupV2UsedFraction(); err != nil {
-		return 0, err
-	} else if ok {
-		return frac, nil
+	probes := []func() (float64, bool, error){
+		cgroupV2UsedFraction,
+		cgroupV1UsedFraction,
 	}
 
-	// 2) Try cgroup v1 (legacy)
-	if frac, ok, err := cgroupV1UsedFraction(); err != nil {
-		return 0, err
-	} else if ok {
-		return frac, nil
+	for _, p := range probes {
+		if frac, ok, err := p(); err != nil {
+			return 0, err
+		} else if ok {
+			return frac, nil
+		}
 	}
 
-	// 3) Fallback to host view
 	return hostMeminfoUsedFraction()
 }
 
