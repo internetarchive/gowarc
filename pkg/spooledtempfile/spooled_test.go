@@ -503,7 +503,7 @@ func TestPoolBehavior(t *testing.T) {
 	}
 
 	// Retrieve a buffer from the pool
-	buf := spooledPool.Get().([]byte)
+	buf := getPooledBuf()
 
 	// Verify that the retrieved buffer has the expected initial capacity
 	if cap(buf) != InitialBufferSize {
@@ -559,7 +559,7 @@ func TestBufferGrowthBeyondNewCap(t *testing.T) {
 	}
 
 	// Verify that the buffer was released to the pool (if it meets the criteria)
-	buf := spooledPool.Get().([]byte)
+	buf := getPooledBuf()
 	if cap(buf) != InitialBufferSize {
 		t.Errorf("Expected buffer in pool to have capacity %d, got %d", InitialBufferSize, cap(buf))
 	}

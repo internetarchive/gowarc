@@ -1,14 +1,11 @@
 package spooledtempfile
 
 import (
-	"bufio"
 	"bytes"
 	"errors"
 	"fmt"
 	"io"
 	"os"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 )
@@ -33,11 +30,28 @@ type globalMemoryCache struct {
 var (
 	memoryUsageCache = &globalMemoryCache{}
 	spooledPool      = sync.Pool{
-		New: func() interface{} {
-			return make([]byte, 0, InitialBufferSize) // Small initial buffer
+		New: func() any {
+			b := make([]byte, 0, InitialBufferSize)
+			return &b
 		},
 	}
 )
+
+// Get a zero-length slice backed by a pooled array (cap == InitialBufferSize).
+func getPooledBuf() []byte {
+	p := spooledPool.Get().(*[]byte)
+	return (*p)[:0]
+}
+
+// Return a slice to the pool without retaining large arrays.
+// IMPORTANT: do NOT pass &s.buf directly; copy a header first.
+func putPooledBuf(b []byte) {
+	if cap(b) == 0 || cap(b) > InitialBufferSize {
+		return // don't retain big arrays
+	}
+	h := b[:0]          // fresh header decoupled from callers
+	spooledPool.Put(&h) // pointer-like -> SA6002 satisfied
+}
 
 // ReaderAt is the interface for ReadAt - read at position, without moving pointer.
 type ReaderAt interface {
@@ -103,7 +117,7 @@ func NewSpooledTempFile(filePrefix string, tempDir string, threshold int, fullOn
 	return &spooledTempFile{
 		filePrefix:          filePrefix,
 		tempDir:             tempDir,
-		buf:                 spooledPool.Get().([]byte), // Get a []byte from the pool
+		buf:                 getPooledBuf(),
 		maxInMemorySize:     threshold,
 		fullOnDisk:          fullOnDisk,
 		maxRAMUsageFraction: maxRAMUsageFraction,
@@ -207,7 +221,7 @@ func (s *spooledTempFile) Write(p []byte) (n int, err error) {
 
 		// Release the buffer back to the pool
 		if s.buf != nil && cap(s.buf) <= InitialBufferSize && cap(s.buf) > 0 {
-			spooledPool.Put(s.buf[:0]) // Reset the buffer before returning it to the pool
+			putPooledBuf(s.buf)
 		}
 		s.buf = nil
 		s.mem = nil // Discard the bytes.Reader
@@ -224,10 +238,7 @@ func (s *spooledTempFile) Write(p []byte) (n int, err error) {
 
 	// Grow the buffer if necessary, but never exceed MaxInMemorySize
 	if len(s.buf)+len(p) > cap(s.buf) {
-		newCap := len(s.buf) + len(p)
-		if newCap > s.maxInMemorySize {
-			newCap = s.maxInMemorySize
-		}
+		newCap := min(len(s.buf)+len(p), s.maxInMemorySize)
 
 		// Allocate a new buffer with the increased capacity
 		newBuf := make([]byte, len(s.buf), newCap)
@@ -235,7 +246,7 @@ func (s *spooledTempFile) Write(p []byte) (n int, err error) {
 
 		// Release the old buffer to the pool
 		if s.buf != nil && cap(s.buf) <= InitialBufferSize && cap(s.buf) > 0 {
-			spooledPool.Put(s.buf[:0]) // Reset the buffer before returning it to the pool
+			putPooledBuf(s.buf)
 		}
 		s.buf = newBuf
 		s.mem = nil // Discard the old bytes.Reader
@@ -253,7 +264,7 @@ func (s *spooledTempFile) Close() error {
 	// Release the buffer back to the pool
 	if s.buf != nil {
 		if cap(s.buf) <= InitialBufferSize && cap(s.buf) > 0 {
-			spooledPool.Put(s.buf[:0]) // Reset the buffer before returning it to the pool
+			putPooledBuf(s.buf)
 		}
 		s.buf = nil
 	}
@@ -308,56 +319,4 @@ func getCachedMemoryUsage() (float64, error) {
 	memoryUsageCache.lastFraction = fraction
 
 	return fraction, nil
-}
-
-var getSystemMemoryUsedFraction = func() (float64, error) {
-	f, err := os.Open("/proc/meminfo")
-	if err != nil {
-		return 0, fmt.Errorf("failed to open /proc/meminfo: %v", err)
-	}
-	defer f.Close()
-
-	var memTotal, memAvailable, memFree, buffers, cached uint64
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := scanner.Text()
-		fields := strings.Fields(line)
-		if len(fields) < 2 {
-			continue
-		}
-		key := strings.TrimRight(fields[0], ":")
-		value, _ := strconv.ParseUint(fields[1], 10, 64)
-		switch key {
-		case "MemTotal":
-			memTotal = value
-		case "MemAvailable":
-			memAvailable = value
-		case "MemFree":
-			memFree = value
-		case "Buffers":
-			buffers = value
-		case "Cached":
-			cached = value
-		}
-		if memTotal > 0 && memAvailable > 0 {
-			break
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return 0, fmt.Errorf("scanner error reading /proc/meminfo: %v", err)
-	}
-
-	if memTotal == 0 {
-		return 0, fmt.Errorf("could not find MemTotal in /proc/meminfo")
-	}
-
-	var used uint64
-	if memAvailable > 0 {
-		used = memTotal - memAvailable
-	} else {
-		approxAvailable := memFree + buffers + cached
-		used = memTotal - approxAvailable
-	}
-
-	return float64(used) / float64(memTotal), nil
 }
