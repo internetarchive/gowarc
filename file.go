@@ -12,7 +12,6 @@ import (
 // generateWARCFilename generate a WARC file name following recommendations of the specs:
 // Prefix-Timestamp-Serial-Crawlhost.warc.gz
 func generateWARCFilename(prefix string, compression string, serial *atomic.Uint64) string {
-	// Get host name as reported by the kernel
 	var filename strings.Builder
 
 	filename.WriteString(prefix)
