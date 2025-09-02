@@ -54,9 +54,9 @@ func TestConcurrentGetNextWarcFileName(t *testing.T) {
 	results := make(chan string, goroutines*iterations)
 	errors := make(chan error, goroutines*iterations)
 
-	for g := 0; g < goroutines; g++ {
+	for range goroutines {
 		go func() {
-			for i := 0; i < iterations; i++ {
+			for range iterations {
 				result := getNextWARCFilename("", "test", "gzip", &serial)
 				results <- result
 			}
@@ -64,7 +64,7 @@ func TestConcurrentGetNextWarcFileName(t *testing.T) {
 	}
 
 	serials := make([]uint64, 0, goroutines*iterations)
-	for i := 0; i < goroutines*iterations; i++ {
+	for range goroutines * iterations {
 		select {
 		case result := <-results:
 			split := strings.Split(result, "-")

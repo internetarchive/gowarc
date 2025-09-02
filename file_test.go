@@ -67,14 +67,12 @@ func TestGenerateWARCFilename_NoRace(_ *testing.T) {
 	start := make(chan struct{})
 
 	for range 10 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			<-start
 			for range iterations {
 				_ = generateWARCFilename(prefix, compression, &serial)
 			}
-		}()
+		})
 	}
 
 	close(start)

@@ -159,10 +159,7 @@ func readUntilDelim(r *bufio.Reader, delim []byte) (line []byte, n int64, err er
 		intermediateBuf = append(intermediateBuf, chunk...)
 
 		// Search for the delimiter starting from a position that accounts for overlap
-		start := len(intermediateBuf) - len(chunk) - (len(delim) - 1)
-		if start < 0 {
-			start = 0
-		}
+		start := max(len(intermediateBuf)-len(chunk)-(len(delim)-1), 0)
 
 		if i := bytes.Index(intermediateBuf[start:], delim); i >= 0 {
 			i += start

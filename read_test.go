@@ -174,7 +174,7 @@ func testFileSingleHashCheck(t *testing.T, path string, hash string, expectedCon
 		}
 
 		badContentLength := false
-		for i := 0; i < len(expectedContentLength); i++ {
+		for i := range expectedContentLength {
 			if record.Header.Get("Content-Length") != expectedContentLength[i] {
 				badContentLength = true
 			} else {
@@ -484,7 +484,7 @@ func BenchmarkBasicRead(b *testing.B) {
 	// default test warc location
 	path := "testdata/test.warc.gz"
 
-	for n := 0; n < b.N; n++ {
+	for b.Loop() {
 		b.Logf("checking 'WARC-Block-Digest' on %q", path)
 
 		file, err := os.Open(path)
@@ -561,10 +561,7 @@ func newSynthReader(total int64, delim []byte, placement string) *synthReader {
 			s.delimStart = start
 		}
 	case "mid":
-		start := total/2 - int64(len(delim))/2
-		if start < 0 {
-			start = 0
-		}
+		start := max(total/2-int64(len(delim))/2, 0)
 		if start+int64(len(delim)) > total {
 			start = total - int64(len(delim))
 		}
@@ -639,10 +636,7 @@ func makeStream(totalSize int64, delim []byte, placement string) (io.Reader, int
 	case "head":
 		wantN = 8 + int64(len(delim))
 	case "mid":
-		pos := totalSize/2 - int64(len(delim))/2
-		if pos < 0 {
-			pos = 0
-		}
+		pos := max(totalSize/2-int64(len(delim))/2, 0)
 		if pos+int64(len(delim)) > totalSize {
 			pos = totalSize - int64(len(delim))
 		}
@@ -711,7 +705,7 @@ func benchReadUntil(b *testing.B, name string, fn readerFn) {
 					}
 
 					b.ResetTimer()
-					for i := 0; i < b.N; i++ {
+					for b.Loop() {
 						rdr := bufio.NewReaderSize(newSynthReader(sz, d, place), 64<<10)
 						_, n, err = fn(rdr, d)
 						sinkN, sinkErr = n, err
