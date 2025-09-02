@@ -659,11 +659,8 @@ func TestHTTPClientConcurrent(t *testing.T) {
 	}
 	waitForErrors := drainErrChan(t, httpClient.ErrChan)
 
-	wg.Add(concurrency)
 	for range concurrency {
-		go func() {
-			defer wg.Done()
-
+		wg.Go(func() {
 			req, err := http.NewRequest("GET", server.URL, nil)
 			req.Close = true
 			if err != nil {
@@ -679,7 +676,7 @@ func TestHTTPClientConcurrent(t *testing.T) {
 			defer resp.Body.Close()
 
 			io.Copy(io.Discard, resp.Body)
-		}()
+		})
 	}
 
 	// Wait for request wait group first before closing out the errorChannel
@@ -717,11 +714,8 @@ func TestHTTPClientMultiWARCWriters(t *testing.T) {
 	}
 	waitForErrors := drainErrChan(t, httpClient.ErrChan)
 
-	wg.Add(concurrency)
 	for range concurrency {
-		go func() {
-			defer wg.Done()
-
+		wg.Go(func() {
 			req, err := http.NewRequest("GET", server.URL, nil)
 			req.Close = true
 			if err != nil {
@@ -737,7 +731,7 @@ func TestHTTPClientMultiWARCWriters(t *testing.T) {
 			defer resp.Body.Close()
 
 			io.Copy(io.Discard, resp.Body)
-		}()
+		})
 	}
 
 	// Wait for request wait group first before closing out the errorChannel
@@ -1253,11 +1247,8 @@ func TestConcurrentHTTPClientPayloadLargerThan2MB(t *testing.T) {
 	}
 	waitForErrors := drainErrChan(t, httpClient.ErrChan)
 
-	wg.Add(concurrency)
 	for range concurrency {
-		go func() {
-			defer wg.Done()
-
+		wg.Go(func() {
 			req, err := http.NewRequest("GET", server.URL, nil)
 			req.Close = true
 			if err != nil {
@@ -1273,7 +1264,7 @@ func TestConcurrentHTTPClientPayloadLargerThan2MB(t *testing.T) {
 
 			io.Copy(io.Discard, resp.Body)
 			resp.Body.Close()
-		}()
+		})
 	}
 
 	// Wait for request wait group first before closing out the errorChannel
@@ -1797,11 +1788,8 @@ func BenchmarkConcurrentUnder2MB(b *testing.B) {
 		}
 	})
 
-	wg.Add(b.N)
 	for b.Loop() {
-		go func() {
-			defer wg.Done()
-
+		wg.Go(func() {
 			req, err := http.NewRequest("GET", server.URL, nil)
 			if err != nil {
 				httpClient.ErrChan <- &Error{Err: err}
@@ -1816,7 +1804,7 @@ func BenchmarkConcurrentUnder2MB(b *testing.B) {
 			defer resp.Body.Close()
 
 			io.Copy(io.Discard, resp.Body)
-		}()
+		})
 	}
 
 	wg.Wait()
@@ -1857,11 +1845,8 @@ func BenchmarkConcurrentUnder2MBZStandard(b *testing.B) {
 		}
 	})
 
-	wg.Add(b.N)
 	for b.Loop() {
-		go func() {
-			defer wg.Done()
-
+		wg.Go(func() {
 			req, err := http.NewRequest("GET", server.URL, nil)
 			if err != nil {
 				httpClient.ErrChan <- &Error{Err: err}
@@ -1876,7 +1861,7 @@ func BenchmarkConcurrentUnder2MBZStandard(b *testing.B) {
 			defer resp.Body.Close()
 
 			io.Copy(io.Discard, resp.Body)
-		}()
+		})
 	}
 
 	wg.Wait()
@@ -1916,11 +1901,8 @@ func BenchmarkConcurrentOver2MB(b *testing.B) {
 		}
 	})
 
-	wg.Add(b.N)
 	for b.Loop() {
-		go func() {
-			defer wg.Done()
-
+		wg.Go(func() {
 			req, err := http.NewRequest("GET", server.URL, nil)
 			if err != nil {
 				httpClient.ErrChan <- &Error{Err: err}
@@ -1935,7 +1917,7 @@ func BenchmarkConcurrentOver2MB(b *testing.B) {
 			defer resp.Body.Close()
 
 			io.Copy(io.Discard, resp.Body)
-		}()
+		})
 	}
 
 	wg.Wait()
@@ -1976,11 +1958,8 @@ func BenchmarkConcurrentOver2MBZStandard(b *testing.B) {
 		}
 	})
 
-	wg.Add(b.N)
 	for b.Loop() {
-		go func() {
-			defer wg.Done()
-
+		wg.Go(func() {
 			req, err := http.NewRequest("GET", server.URL, nil)
 			if err != nil {
 				httpClient.ErrChan <- &Error{Err: err}
@@ -1995,7 +1974,7 @@ func BenchmarkConcurrentOver2MBZStandard(b *testing.B) {
 			defer resp.Body.Close()
 
 			io.Copy(io.Discard, resp.Body)
-		}()
+		})
 	}
 
 	wg.Wait()
