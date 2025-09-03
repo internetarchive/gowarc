@@ -3,7 +3,6 @@ module github.com/internetarchive/gowarc
 go 1.24.2
 
 require (
-	github.com/davecgh/go-spew v1.1.1
 	github.com/google/uuid v1.6.0
 	github.com/klauspost/compress v1.18.0
 	github.com/maypok86/otter v1.2.4
@@ -13,6 +12,7 @@ require (
 	github.com/spf13/cobra v1.9.1
 	github.com/things-go/go-socks5 v0.0.6
 	github.com/ulikunitz/xz v0.5.14
+	github.com/valyala/bytebufferpool v1.0.0
 	github.com/zeebo/blake3 v0.2.4
 	go.uber.org/goleak v1.3.0
 	golang.org/x/net v0.39.0

@@ -8,6 +8,8 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"github.com/valyala/bytebufferpool"
 )
 
 const (
@@ -29,29 +31,7 @@ type globalMemoryCache struct {
 
 var (
 	memoryUsageCache = &globalMemoryCache{}
-	spooledPool      = sync.Pool{
-		New: func() any {
-			b := make([]byte, 0, InitialBufferSize)
-			return &b
-		},
-	}
 )
-
-// Get a zero-length slice backed by a pooled array (cap == InitialBufferSize).
-func getPooledBuf() []byte {
-	p := spooledPool.Get().(*[]byte)
-	return (*p)[:0]
-}
-
-// Return a slice to the pool without retaining large arrays.
-// IMPORTANT: do NOT pass &s.buf directly; copy a header first.
-func putPooledBuf(b []byte) {
-	if cap(b) == 0 || cap(b) > InitialBufferSize {
-		return // don't retain big arrays
-	}
-	h := b[:0]          // fresh header decoupled from callers
-	spooledPool.Put(&h) // pointer-like -> SA6002 satisfied
-}
 
 // ReaderAt is the interface for ReadAt - read at position, without moving pointer.
 type ReaderAt interface {
@@ -69,7 +49,7 @@ type ReadSeekCloser interface {
 // spooledTempFile writes to memory (or to disk if
 // over MaxInMemorySize) and deletes the file on Close
 type spooledTempFile struct {
-	buf                 []byte        // Use []byte instead of bytes.Buffer
+	buf                 *bytebufferpool.ByteBuffer
 	mem                 *bytes.Reader // Reader for in-memory data
 	file                *os.File
 	filePrefix          string
@@ -117,7 +97,7 @@ func NewSpooledTempFile(filePrefix string, tempDir string, threshold int, fullOn
 	return &spooledTempFile{
 		filePrefix:          filePrefix,
 		tempDir:             tempDir,
-		buf:                 getPooledBuf(),
+		buf:                 bytebufferpool.Get(),
 		maxInMemorySize:     threshold,
 		fullOnDisk:          fullOnDisk,
 		maxRAMUsageFraction: maxRAMUsageFraction,
@@ -141,7 +121,7 @@ func (s *spooledTempFile) prepareRead() error {
 		return nil
 	}
 
-	s.mem = bytes.NewReader(s.buf) // Create a reader from the []byte slice
+	s.mem = bytes.NewReader(s.buf.Bytes())
 	return nil
 }
 
@@ -153,7 +133,7 @@ func (s *spooledTempFile) Len() int {
 		}
 		return int(fi.Size())
 	}
-	return len(s.buf) // Return the length of the []byte slice
+	return s.buf.Len()
 }
 
 func (s *spooledTempFile) Read(p []byte) (n int, err error) {
@@ -195,6 +175,7 @@ func (s *spooledTempFile) Write(p []byte) (n int, err error) {
 	if s.closed {
 		return 0, io.EOF
 	}
+
 	if s.reading {
 		panic("write after read")
 	}
@@ -204,7 +185,7 @@ func (s *spooledTempFile) Write(p []byte) (n int, err error) {
 	}
 
 	aboveRAMThreshold := s.isSystemMemoryUsageHigh()
-	if aboveRAMThreshold || s.fullOnDisk || (len(s.buf)+len(p) > s.maxInMemorySize) {
+	if aboveRAMThreshold || s.fullOnDisk || (s.buf.Len()+len(p) > s.maxInMemorySize) {
 		// Switch to file if we haven't already
 		s.file, err = os.CreateTemp(s.tempDir, s.filePrefix+"-")
 		if err != nil {
@@ -212,7 +193,7 @@ func (s *spooledTempFile) Write(p []byte) (n int, err error) {
 		}
 
 		// Copy what we already had in the buffer
-		_, err = s.file.Write(s.buf)
+		_, err = s.buf.WriteTo(s.file)
 		if err != nil {
 			s.file.Close()
 			s.file = nil
@@ -220,11 +201,10 @@ func (s *spooledTempFile) Write(p []byte) (n int, err error) {
 		}
 
 		// Release the buffer back to the pool
-		if s.buf != nil && cap(s.buf) <= InitialBufferSize && cap(s.buf) > 0 {
-			putPooledBuf(s.buf)
+		if s.buf != nil {
+			bytebufferpool.Put(s.buf)
 		}
 		s.buf = nil
-		s.mem = nil // Discard the bytes.Reader
 
 		// Write incoming bytes directly to file
 		n, err = s.file.Write(p)
@@ -236,36 +216,22 @@ func (s *spooledTempFile) Write(p []byte) (n int, err error) {
 		return n, nil
 	}
 
-	// Grow the buffer if necessary, but never exceed MaxInMemorySize
-	if len(s.buf)+len(p) > cap(s.buf) {
-		newCap := min(len(s.buf)+len(p), s.maxInMemorySize)
-
-		// Allocate a new buffer with the increased capacity
-		newBuf := make([]byte, len(s.buf), newCap)
-		copy(newBuf, s.buf)
-
-		// Release the old buffer to the pool
-		if s.buf != nil && cap(s.buf) <= InitialBufferSize && cap(s.buf) > 0 {
-			putPooledBuf(s.buf)
-		}
-		s.buf = newBuf
-		s.mem = nil // Discard the old bytes.Reader
-	}
-
 	// Append data to the buffer
-	s.buf = append(s.buf, p...)
+	s.buf.Write(p)
 	return len(p), nil
 }
 
 func (s *spooledTempFile) Close() error {
 	s.closed = true
-	s.mem = nil
+
+	if s.mem != nil {
+		s.mem.Reset([]byte{})
+		s.mem = nil
+	}
 
 	// Release the buffer back to the pool
 	if s.buf != nil {
-		if cap(s.buf) <= InitialBufferSize && cap(s.buf) > 0 {
-			putPooledBuf(s.buf)
-		}
+		bytebufferpool.Put(s.buf)
 		s.buf = nil
 	}
 
@@ -297,7 +263,7 @@ func (s *spooledTempFile) isSystemMemoryUsageHigh() bool {
 	if err != nil {
 		// If we fail to get memory usage info, we conservatively return false,
 		// or you may choose to return true to avoid in-memory usage.
-		return false
+		return true
 	}
 	return usedFraction >= s.maxRAMUsageFraction
 }
