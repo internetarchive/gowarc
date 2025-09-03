@@ -9,15 +9,15 @@ import (
 	"time"
 
 	"github.com/internetarchive/gowarc/pkg/spooledtempfile"
-	"github.com/klauspost/compress/gzip"
-
 	"github.com/google/uuid"
 	"github.com/klauspost/compress/zstd"
 )
 
+//go:generate go build -tags standard_gzip
+
 // Writer writes WARC records to WARC files.
 type Writer struct {
-	GZIPWriter      *gzip.Writer
+	GZIPWriter      GzipWriterInterface
 	ZSTDWriter      *zstd.Encoder
 	FileWriter      *bufio.Writer
 	FileName        string

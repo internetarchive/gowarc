@@ -3,7 +3,6 @@ module github.com/internetarchive/gowarc
 go 1.24.2
 
 require (
-	github.com/davecgh/go-spew v1.1.1
 	github.com/google/uuid v1.6.0
 	github.com/klauspost/compress v1.18.0
 	github.com/maypok86/otter v1.2.4
@@ -18,6 +17,12 @@ require (
 	golang.org/x/net v0.39.0
 	golang.org/x/sync v0.13.0
 )
+
+// By default, and historically, this project uses klauspost's gzip implementation,
+// which is faster than the standard library gzip, but comes at the cost of less predictable
+// memory usage. It's widely used and stable but if you want to use the standard library gzip,
+// you can build with the standard_gzip tag:
+// go build -tags standard_gzip
 
 require (
 	github.com/andybalholm/brotli v1.1.1 // indirect

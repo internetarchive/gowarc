@@ -11,8 +11,6 @@ import (
 	"time"
 
 	"github.com/internetarchive/gowarc/pkg/spooledtempfile"
-	gzip "github.com/klauspost/compress/gzip"
-
 	"github.com/klauspost/compress/zstd"
 )
 
@@ -46,7 +44,7 @@ func NewWriter(writer io.Writer, fileName string, digestAlgorithm DigestAlgorith
 	if compression != "" {
 		switch compression {
 		case "GZIP":
-			gzipWriter := gzip.NewWriter(writer)
+			gzipWriter := newGzipWriter(writer)
 
 			return &Writer{
 				FileName:        fileName,
