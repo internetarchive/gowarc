@@ -41,19 +41,15 @@ func (d *customDialer) archiveDNS(ctx context.Context, address string) (resolved
 
 	for DNSServer := 0; DNSServer <= fallbackServers; DNSServer++ {
 		if !d.disableIPv4 {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				ipv4, errA = d.lookupIP(ctx, address, dns.TypeA, DNSServer)
-			}()
+			})
 		}
 
 		if !d.disableIPv6 {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				ipv6, errAAAA = d.lookupIP(ctx, address, dns.TypeAAAA, DNSServer)
-			}()
+			})
 		}
 
 		wg.Wait()

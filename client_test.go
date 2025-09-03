@@ -66,13 +66,11 @@ func defaultBenchmarkRotatorSettings(t *testing.B) *RotatorSettings {
 // Helper function used in many tests
 func drainErrChan(t *testing.T, errChan chan *Error) func() {
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for err := range errChan {
 			t.Errorf("Error writing to WARC: %s", err.Err.Error())
 		}
-	}()
+	})
 	return func() { wg.Wait() }
 }
 
@@ -91,13 +89,7 @@ func newTestImageServer(t testing.TB, st int) *httptest.Server {
 func (e *errorReadCloser) Read(p []byte) (int, error) {
 	if len(e.data) > 0 && e.readBefore > 0 {
 		// Read up to min(len(p), readBefore, len(data))
-		n := len(p)
-		if e.readBefore < n {
-			n = e.readBefore
-		}
-		if len(e.data) < n {
-			n = len(e.data)
-		}
+		n := min(len(e.data), min(e.readBefore, len(p)))
 		copy(p, e.data[:n])
 		e.data = e.data[n:]
 		e.readBefore -= n
@@ -180,13 +172,11 @@ func TestHTTPClientRequestFailing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Unable to init WARC writing HTTP client: %s", err)
 	}
-	errWg.Add(1)
-	go func() {
-		defer errWg.Done()
+	errWg.Go(func() {
 		for _ = range httpClient.ErrChan {
 			// We expect an error here, so we don't need to log it
 		}
-	}()
+	})
 
 	// Prepare some dummy data and configure our error injector
 	data := []byte("this is some test data")
@@ -240,12 +230,10 @@ func TestHTTPClientConnReadDeadline(t *testing.T) {
 	}
 
 	// Read any WARC-writing errors
-	errWg.Add(1)
-	go func() {
-		defer errWg.Done()
+	errWg.Go(func() {
 		for range httpClient.ErrChan {
 		}
-	}()
+	})
 
 	// 3) Create a request
 	req, err := http.NewRequest("GET", server.URL, nil)
@@ -302,13 +290,11 @@ func TestHTTPClientContextCancellation(t *testing.T) {
 	}
 
 	// Read any WARC-writing errors
-	errWg.Add(1)
-	go func() {
-		defer errWg.Done()
+	errWg.Go(func() {
 		for _ = range httpClient.ErrChan {
 			// t.Errorf("Error writing to WARC: %s", e.Err.Error())
 		}
-	}()
+	})
 
 	// 3) Create a request with a cancellable context
 	ctx, cancel := context.WithCancel(context.Background())
@@ -516,13 +502,11 @@ func TestHTTPClientServerClosingConnection(t *testing.T) {
 		t.Fatalf("Unable to init WARC writing HTTP client: %s", err)
 	}
 
-	errWg.Add(1)
-	go func() {
-		defer errWg.Done()
+	errWg.Go(func() {
 		for _ = range httpClient.ErrChan {
 			// We expect an error here, so we don't need to log it
 		}
-	}()
+	})
 
 	req, err := http.NewRequest("GET", server.URL, nil)
 	if err != nil {
@@ -675,11 +659,8 @@ func TestHTTPClientConcurrent(t *testing.T) {
 	}
 	waitForErrors := drainErrChan(t, httpClient.ErrChan)
 
-	wg.Add(concurrency)
-	for i := 0; i < concurrency; i++ {
-		go func() {
-			defer wg.Done()
-
+	for range concurrency {
+		wg.Go(func() {
 			req, err := http.NewRequest("GET", server.URL, nil)
 			req.Close = true
 			if err != nil {
@@ -695,7 +676,7 @@ func TestHTTPClientConcurrent(t *testing.T) {
 			defer resp.Body.Close()
 
 			io.Copy(io.Discard, resp.Body)
-		}()
+		})
 	}
 
 	// Wait for request wait group first before closing out the errorChannel
@@ -733,11 +714,8 @@ func TestHTTPClientMultiWARCWriters(t *testing.T) {
 	}
 	waitForErrors := drainErrChan(t, httpClient.ErrChan)
 
-	wg.Add(concurrency)
-	for i := 0; i < concurrency; i++ {
-		go func() {
-			defer wg.Done()
-
+	for range concurrency {
+		wg.Go(func() {
 			req, err := http.NewRequest("GET", server.URL, nil)
 			req.Close = true
 			if err != nil {
@@ -753,7 +731,7 @@ func TestHTTPClientMultiWARCWriters(t *testing.T) {
 			defer resp.Body.Close()
 
 			io.Copy(io.Discard, resp.Body)
-		}()
+		})
 	}
 
 	// Wait for request wait group first before closing out the errorChannel
@@ -803,7 +781,7 @@ func TestHTTPClientLocalDedupe(t *testing.T) {
 	}
 	waitForErrors := drainErrChan(t, httpClient.ErrChan)
 
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		req, err := http.NewRequest("GET", server.URL, nil)
 		if err != nil {
 			t.Fatal(err)
@@ -897,7 +875,7 @@ func TestHTTPClientRemoteDedupe(t *testing.T) {
 	}
 	waitForErrors := drainErrChan(t, httpClient.ErrChan)
 
-	for i := 0; i < 4; i++ {
+	for range 4 {
 		req, err := http.NewRequest("GET", server.URL, nil)
 		if err != nil {
 			t.Fatal(err)
@@ -991,15 +969,13 @@ func TestHTTPClientDoppelgangerDedupe(t *testing.T) {
 		t.Fatalf("Unable to init WARC writing HTTP client: %s", err)
 	}
 
-	errWg.Add(1)
-	go func() {
-		defer errWg.Done()
+	errWg.Go(func() {
 		for err := range httpClient.ErrChan {
 			t.Errorf("Error writing to WARC: %s", err.Err.Error())
 		}
-	}()
+	})
 
-	for i := 0; i < 4; i++ {
+	for range 4 {
 		req, err := http.NewRequest("GET", server.URL, nil)
 		if err != nil {
 			t.Fatal(err)
@@ -1073,7 +1049,7 @@ func TestHTTPClientDedupeEmptyPayload(t *testing.T) {
 	}
 	waitForErrors := drainErrChan(t, httpClient.ErrChan)
 
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		req, err := http.NewRequest("GET", server.URL, nil)
 		if err != nil {
 			t.Fatal(err)
@@ -1147,9 +1123,7 @@ func TestHTTPClientDiscardHook(t *testing.T) {
 		t.Fatalf("Unable to init WARC writing HTTP client: %s", err)
 	}
 
-	errWg.Add(1)
-	go func() {
-		defer errWg.Done()
+	errWg.Go(func() {
 		for err := range httpClient.ErrChan {
 			// validate 429 filtering as well as error reporting by url
 			discardErr, ok := err.Err.(*DiscardHookError)
@@ -1164,7 +1138,7 @@ func TestHTTPClientDiscardHook(t *testing.T) {
 				t.Errorf("Expected Reason %s, got: %s", expectedReason, discardErr.Reason)
 			}
 		}
-	}()
+	})
 
 	req, err := http.NewRequest("GET", server.URL, nil)
 	if err != nil {
@@ -1273,11 +1247,8 @@ func TestConcurrentHTTPClientPayloadLargerThan2MB(t *testing.T) {
 	}
 	waitForErrors := drainErrChan(t, httpClient.ErrChan)
 
-	wg.Add(concurrency)
-	for i := 0; i < concurrency; i++ {
-		go func() {
-			defer wg.Done()
-
+	for range concurrency {
+		wg.Go(func() {
 			req, err := http.NewRequest("GET", server.URL, nil)
 			req.Close = true
 			if err != nil {
@@ -1293,7 +1264,7 @@ func TestConcurrentHTTPClientPayloadLargerThan2MB(t *testing.T) {
 
 			io.Copy(io.Discard, resp.Body)
 			resp.Body.Close()
-		}()
+		})
 	}
 
 	// Wait for request wait group first before closing out the errorChannel
@@ -1480,16 +1451,14 @@ func TestHTTPClientWithoutIoCopy(t *testing.T) {
 		t.Fatalf("Unable to init WARC writing HTTP client: %s", err)
 	}
 
-	errWg.Add(1)
-	go func() {
-		defer errWg.Done()
+	errWg.Go(func() {
 		for err := range httpClient.ErrChan {
 			// validate 429 filtering as well as error reporting by url
 			if strings.Contains(err.Err.Error(), "SHA1 ran into an unrecoverable error url") {
 				t.Errorf("Error writing to WARC: %s", err.Err.Error())
 			}
 		}
-	}()
+	})
 
 	req, err := http.NewRequest("GET", server.URL, nil)
 	if err != nil {
@@ -1813,19 +1782,14 @@ func BenchmarkConcurrentUnder2MB(b *testing.B) {
 		b.Fatalf("Unable to init WARC writing HTTP client: %s", err)
 	}
 
-	errWg.Add(1)
-	go func() {
-		defer errWg.Done()
+	errWg.Go(func() {
 		for err := range httpClient.ErrChan {
 			b.Errorf("Error writing to WARC: %s", err.Err.Error())
 		}
-	}()
+	})
 
-	wg.Add(b.N)
-	for n := 0; n < b.N; n++ {
-		go func() {
-			defer wg.Done()
-
+	for b.Loop() {
+		wg.Go(func() {
 			req, err := http.NewRequest("GET", server.URL, nil)
 			if err != nil {
 				httpClient.ErrChan <- &Error{Err: err}
@@ -1840,7 +1804,7 @@ func BenchmarkConcurrentUnder2MB(b *testing.B) {
 			defer resp.Body.Close()
 
 			io.Copy(io.Discard, resp.Body)
-		}()
+		})
 	}
 
 	wg.Wait()
@@ -1875,19 +1839,14 @@ func BenchmarkConcurrentUnder2MBZStandard(b *testing.B) {
 		b.Fatalf("Unable to init WARC writing HTTP client: %s", err)
 	}
 
-	errWg.Add(1)
-	go func() {
-		defer errWg.Done()
+	errWg.Go(func() {
 		for err := range httpClient.ErrChan {
 			b.Errorf("Error writing to WARC: %s", err.Err.Error())
 		}
-	}()
+	})
 
-	wg.Add(b.N)
-	for n := 0; n < b.N; n++ {
-		go func() {
-			defer wg.Done()
-
+	for b.Loop() {
+		wg.Go(func() {
 			req, err := http.NewRequest("GET", server.URL, nil)
 			if err != nil {
 				httpClient.ErrChan <- &Error{Err: err}
@@ -1902,7 +1861,7 @@ func BenchmarkConcurrentUnder2MBZStandard(b *testing.B) {
 			defer resp.Body.Close()
 
 			io.Copy(io.Discard, resp.Body)
-		}()
+		})
 	}
 
 	wg.Wait()
@@ -1936,19 +1895,14 @@ func BenchmarkConcurrentOver2MB(b *testing.B) {
 		b.Fatalf("Unable to init WARC writing HTTP client: %s", err)
 	}
 
-	errWg.Add(1)
-	go func() {
-		defer errWg.Done()
+	errWg.Go(func() {
 		for err := range httpClient.ErrChan {
 			b.Errorf("Error writing to WARC: %s", err.Err.Error())
 		}
-	}()
+	})
 
-	wg.Add(b.N)
-	for n := 0; n < b.N; n++ {
-		go func() {
-			defer wg.Done()
-
+	for b.Loop() {
+		wg.Go(func() {
 			req, err := http.NewRequest("GET", server.URL, nil)
 			if err != nil {
 				httpClient.ErrChan <- &Error{Err: err}
@@ -1963,7 +1917,7 @@ func BenchmarkConcurrentOver2MB(b *testing.B) {
 			defer resp.Body.Close()
 
 			io.Copy(io.Discard, resp.Body)
-		}()
+		})
 	}
 
 	wg.Wait()
@@ -1998,19 +1952,14 @@ func BenchmarkConcurrentOver2MBZStandard(b *testing.B) {
 		b.Fatalf("Unable to init WARC writing HTTP client: %s", err)
 	}
 
-	errWg.Add(1)
-	go func() {
-		defer errWg.Done()
+	errWg.Go(func() {
 		for err := range httpClient.ErrChan {
 			b.Errorf("Error writing to WARC: %s", err.Err.Error())
 		}
-	}()
+	})
 
-	wg.Add(b.N)
-	for n := 0; n < b.N; n++ {
-		go func() {
-			defer wg.Done()
-
+	for b.Loop() {
+		wg.Go(func() {
 			req, err := http.NewRequest("GET", server.URL, nil)
 			if err != nil {
 				httpClient.ErrChan <- &Error{Err: err}
@@ -2025,7 +1974,7 @@ func BenchmarkConcurrentOver2MBZStandard(b *testing.B) {
 			defer resp.Body.Close()
 
 			io.Copy(io.Discard, resp.Body)
-		}()
+		})
 	}
 
 	wg.Wait()

@@ -161,7 +161,7 @@ func TestGetNextIPAnyIPMultipleIPv6(t *testing.T) {
 	availableIPs := &availableIPs{AnyIP: true}
 	availableIPs.IPs.Store(&ipList)
 
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		ip := GetNextIP(availableIPs)
 		if ip == nil {
 			t.Error("Expected non-nil IP, got nil")

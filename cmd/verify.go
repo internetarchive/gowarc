@@ -64,15 +64,13 @@ func verify(cmd *cobra.Command, files []string) {
 			// Output the message if not in --json mode
 			logger.Info("verifying", "file", filepath, "threads", threads)
 		}
-		for i := 0; i < threads; i++ {
-			processWg.Add(1)
-			go func() {
-				defer processWg.Done()
+		for range threads {
+			processWg.Go(func() {
 				for record := range recordChan {
 					processVerifyRecord(record, filepath, results)
 					record.Content.Close()
 				}
-			}()
+			})
 		}
 
 		f, err := os.Open(filepath)
@@ -88,9 +86,7 @@ func verify(cmd *cobra.Command, files []string) {
 		}
 
 		// Read records and send them to workers
-		recordReaderWg.Add(1)
-		go func() {
-			defer recordReaderWg.Done()
+		recordReaderWg.Go(func() {
 			defer close(recordChan)
 			for {
 				record, err := reader.ReadRecord()
@@ -124,13 +120,11 @@ func verify(cmd *cobra.Command, files []string) {
 
 				recordChan <- record
 			}
-		}()
+		})
 
 		// Collect results from workers
 
-		recordReaderWg.Add(1)
-		go func() {
-			defer recordReaderWg.Done()
+		recordReaderWg.Go(func() {
 			for res := range results {
 				if !res.blockDigestValid {
 					valid = false
@@ -145,7 +139,7 @@ func verify(cmd *cobra.Command, files []string) {
 					errorsCount++
 				}
 			}
-		}()
+		})
 
 		processWg.Wait()
 		close(results)

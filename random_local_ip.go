@@ -171,7 +171,7 @@ func generateRandomIPv6(baseIPv6Net net.IPNet) (net.IP, error) {
 	randomizedIP := baseIP.Mask(baseIPv6Net.Mask)
 
 	// Apply the random host bits to the randomized IP
-	for i := 0; i < nBytes; i++ {
+	for i := range nBytes {
 		randomizedIP[16-nBytes+i] |= randomBytes[i]
 	}
 
