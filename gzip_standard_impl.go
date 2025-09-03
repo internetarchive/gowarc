@@ -6,7 +6,6 @@ package warc
 import (
 	"compress/gzip"
 	"io"
-	"log/slog"
 )
 
 func newGzipWriter(w io.Writer) GzipWriterInterface {
