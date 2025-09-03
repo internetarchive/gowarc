@@ -13,8 +13,6 @@ import (
 	"github.com/klauspost/compress/zstd"
 )
 
-//go:generate go build -tags standard_gzip
-
 // Writer writes WARC records to WARC files.
 type Writer struct {
 	GZIPWriter      GzipWriterInterface
