@@ -19,6 +19,12 @@ require (
 	golang.org/x/sync v0.13.0
 )
 
+// By default, and historically, this project uses klauspost's gzip implementation,
+// which is faster than the standard library gzip, but comes at the cost of less predictable
+// memory usage. It's widely used and stable but if you want to use the standard library gzip,
+// you can build with the standard_gzip tag:
+// go build -tags standard_gzip
+
 require (
 	github.com/andybalholm/brotli v1.1.1 // indirect
 	github.com/cloudflare/circl v1.6.1 // indirect

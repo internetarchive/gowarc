@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"sync"
 	"time"
@@ -257,12 +258,13 @@ func (s *spooledTempFile) FileName() string {
 
 // isSystemMemoryUsageHigh returns true if current memory usage
 // exceeds s.maxRAMUsageFraction of total system memory.
-// This implementation is Linux-specific via /proc/meminfo.
+// This implementation is Linux-specific via cgroup1/2 & /proc/meminfo.
 func (s *spooledTempFile) isSystemMemoryUsageHigh() bool {
 	usedFraction, err := getCachedMemoryUsage()
 	if err != nil {
-		// If we fail to get memory usage info, we conservatively return false,
-		// or you may choose to return true to avoid in-memory usage.
+		// Log the error since this should never happen
+		log.Printf("spooledtempfile: error getting memory usage: %v", err)
+		// Conservatively return true to trigger spilling to disk
 		return true
 	}
 	return usedFraction >= s.maxRAMUsageFraction

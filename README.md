@@ -113,6 +113,11 @@ func main() {
 }
 ```
 
+## Build tags
+
+- `standard_gzip`: Use the standard library gzip implementation instead of the faster one from [klauspost](https://github.com/klauspost/compress)
+- `klauspost_gzip`: Use the faster gzip implementation from [klauspost](https://github.com/klauspost/compress) (default, you don't need to specify it)
+
 ## License
 
 This module is released under CC0 license.

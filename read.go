@@ -4,18 +4,15 @@ import (
 	"bufio"
 	"bytes"
 	"compress/bzip2"
-	"sync"
-
-	// "compress/gzip"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"strconv"
+	"sync"
 
 	"github.com/internetarchive/gowarc/pkg/spooledtempfile"
-	"github.com/klauspost/compress/gzip"
 	"github.com/klauspost/compress/zstd"
 	"github.com/ulikunitz/xz"
 )
@@ -34,11 +31,11 @@ const (
 type Reader struct {
 	threshold int
 
-	src       *bufio.Reader   // raw concatenated .gz input - wrapped in countingReader
-	cr        *countingReader // counts compressed bytes actually consumed
-	dec       io.ReadCloser   // current decompressor (gz/plain/…)
-	gz        *gzip.Reader    // cached when compType == decReaderGZip
-	bufReader *bufio.Reader   // consuming layer (reused via Reset)
+	src       *bufio.Reader       // raw concatenated .gz input - wrapped in countingReader
+	cr        *countingReader     // counts compressed bytes actually consumed
+	dec       io.ReadCloser       // current decompressor (gz/plain/…)
+	gz        GzipReaderInterface // cached when compType == decReaderGZip
+	bufReader *bufio.Reader       // consuming layer (reused via Reset)
 
 	inited   bool
 	compType decReaderType
@@ -237,7 +234,7 @@ func (r *Reader) ReadRecord(opts ...ReadOpts) (*Record, error) {
 		}
 
 		if r.compType == decReaderGZip {
-			r.gz = r.dec.(*gzip.Reader)
+			r.gz = r.dec.(GzipReaderInterface)
 			r.gz.Multistream(false)
 		}
 
@@ -438,7 +435,7 @@ func (c *countingReader) newDecompressionReader() (io.ReadCloser, decReaderType,
 // decompressGZip decompresses a GZip stream from the given input reader r.
 func decompressGZip(br *countingReader) (io.ReadCloser, error) {
 	// Open GZip reader
-	dr, err := gzip.NewReader(br)
+	dr, err := newGzipReader(br)
 	if err != nil {
 		return nil, fmt.Errorf("read GZip stream: %w", err)
 	}
