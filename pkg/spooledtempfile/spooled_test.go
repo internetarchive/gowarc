@@ -501,19 +501,6 @@ func TestPoolBehavior(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Close error: %v", err)
 	}
-
-	// Retrieve a buffer from the pool
-	// buf := bytebufferpool.Get()
-
-	// Verify that the retrieved buffer has the expected initial capacity
-	// if cap(buf) != InitialBufferSize {
-	// 	t.Errorf("Expected buffer in pool to have capacity %d, got %d", InitialBufferSize, cap(buf))
-	// }
-
-	// Verify that the buffer is empty (reset)
-	// if len(buf) != 0 {
-	// 	t.Errorf("Expected buffer length to be 0, got %d", len(buf))
-	// }
 }
 
 func TestBufferGrowthBeyondNewCap(t *testing.T) {
@@ -557,15 +544,6 @@ func TestBufferGrowthBeyondNewCap(t *testing.T) {
 	if !bytes.Equal(out, expected) {
 		t.Errorf("Data mismatch. Got %q, want %q", out, expected)
 	}
-
-	// Verify that the buffer was released to the pool (if it meets the criteria)
-	// buf := getPooledBuf()
-	// if cap(buf) != InitialBufferSize {
-	// 	t.Errorf("Expected buffer in pool to have capacity %d, got %d", InitialBufferSize, cap(buf))
-	// }
-	// if len(buf) != 0 {
-	// 	t.Errorf("Expected buffer length to be 0, got %d", len(buf))
-	// }
 }
 
 func TestSpoolingWhenIOCopy(t *testing.T) {
