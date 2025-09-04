@@ -461,8 +461,8 @@ func TestBufferGrowthWithinLimits(t *testing.T) {
 
 	// Check that the buffer grew
 	spoolBuffer := spool.(*spooledTempFile)
-	if cap(spoolBuffer.buf) <= InitialBufferSize {
-		t.Fatalf("Expected buffer capacity > %d, got %d", InitialBufferSize, cap(spoolBuffer.buf))
+	if spoolBuffer.buf.Len() <= InitialBufferSize {
+		t.Fatalf("Expected buffer capacity > %d, got %d", InitialBufferSize, spoolBuffer.buf.Len())
 	}
 
 	// Check that the buffer is still in memory and has grown
@@ -492,27 +492,14 @@ func TestPoolBehavior(t *testing.T) {
 
 	// Ensure the buffer has grown beyond InitialBufferSize
 	spoolTempFile := spool.(*spooledTempFile)
-	if cap(spoolTempFile.buf) <= InitialBufferSize {
-		t.Fatalf("Expected buffer capacity > %d, got %d", InitialBufferSize, cap(spoolTempFile.buf))
+	if spoolTempFile.buf.Len() <= InitialBufferSize {
+		t.Fatalf("Expected buffer capacity > %d, got %d", InitialBufferSize, spoolTempFile.buf.Len())
 	}
 
 	// Close the spool to release the buffer
 	err = spool.Close()
 	if err != nil {
 		t.Fatalf("Close error: %v", err)
-	}
-
-	// Retrieve a buffer from the pool
-	buf := getPooledBuf()
-
-	// Verify that the retrieved buffer has the expected initial capacity
-	if cap(buf) != InitialBufferSize {
-		t.Errorf("Expected buffer in pool to have capacity %d, got %d", InitialBufferSize, cap(buf))
-	}
-
-	// Verify that the buffer is empty (reset)
-	if len(buf) != 0 {
-		t.Errorf("Expected buffer length to be 0, got %d", len(buf))
 	}
 }
 
@@ -556,15 +543,6 @@ func TestBufferGrowthBeyondNewCap(t *testing.T) {
 	}
 	if !bytes.Equal(out, expected) {
 		t.Errorf("Data mismatch. Got %q, want %q", out, expected)
-	}
-
-	// Verify that the buffer was released to the pool (if it meets the criteria)
-	buf := getPooledBuf()
-	if cap(buf) != InitialBufferSize {
-		t.Errorf("Expected buffer in pool to have capacity %d, got %d", InitialBufferSize, cap(buf))
-	}
-	if len(buf) != 0 {
-		t.Errorf("Expected buffer length to be 0, got %d", len(buf))
 	}
 }
 
