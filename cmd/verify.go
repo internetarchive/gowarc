@@ -195,9 +195,9 @@ func verifyPayloadDigest(record *warc.Record, filepath string) (errorsCount int,
 	defer resp.Body.Close()
 	defer record.Content.Seek(0, 0)
 
-	if resp.Header.Get("X-Crawler-Transfer-Encoding") != "" || resp.Header.Get("X-Crawler-Content-Encoding") != "" {
+	if resp.Header.Get("X-Crawler-Transfer-Encoding") != "" || resp.Header.Get("X-Crawler-Content-Encoding") != "" || resp.Header.Get("x-orig-content-encoding") != "" || resp.Header.Get("x-orig-transfer-encoding") != "" {
 		// This header being present in the HTTP headers indicates transfer-encoding and/or content-encoding were incorrectly stripped, causing us to not be able to verify the payload digest.
-		logger.Error("malfomed headers prevent accurate payload digest calculation", "file", filepath, "recordID", record.Header.Get("WARC-Record-ID"))
+		logger.Error("malformed headers prevent accurate payload digest calculation", "file", filepath, "recordID", record.Header.Get("WARC-Record-ID"))
 
 		valid = false
 		errorsCount++
