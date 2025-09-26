@@ -1,4 +1,4 @@
-# WARC Mend Command
+# WARC mend command
 
 The `mend` command helps fix corrupted or incomplete gzip-compressed WARC files (usually `.gz.open`) that were left in an invalid state during crawling or due to disk/network issues.
 
@@ -7,7 +7,6 @@ The `mend` command helps fix corrupted or incomplete gzip-compressed WARC files 
 1. **Truncate Extra Trailing Bytes**: Detects and removes garbage data after the last valid WARC record
 2. **Truncate at Corruption Point**: When a corrupted record is detected, truncates the file at the last valid record position
 3. **Remove .open Suffix**: Removes the `.open` suffix from WARC files to "close" them
-4. **Data Preservation**: Uses advanced truncation logic that preserves more valid data than other tools
 5. **Summary Statistics**: Provides comprehensive statistics on processed files, records, and bytes saved
 
 ## Scope
