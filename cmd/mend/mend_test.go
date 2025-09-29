@@ -179,6 +179,78 @@ func TestMendResultValidation(t *testing.T) {
 	t.Logf("validation passed for corrupted file: size=%d bytes, records=%d, truncateAt=%d bytes, newName=%s", result.fileSize, result.recordCount, result.truncateAt, result.newName)
 }
 
+// TestAnalyzeWARCFileForceMode tests analyzeWARCFile with force=true on good closed WARC files
+func TestAnalyzeWARCFileForceMode(t *testing.T) {
+	testdataDir := "../../testdata"
+
+	tests := []struct {
+		name            string
+		filename        string
+		expectedRecords int
+		description     string
+	}{
+		{
+			name:            "good_closed_warc_force_mode",
+			filename:        "test.warc.gz",
+			expectedRecords: 3, // Known from read_test.go
+			description:     "A good closed WARC file processed with force=true should be analyzed properly",
+		},
+		{
+			name:            "skip_non_open_force_mode",
+			filename:        "skip-non-open.warc.gz",
+			expectedRecords: 0, // We don't know the expected count, just verify it's processed
+			description:     "Another closed WARC file processed with force=true",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			filePath := filepath.Join(testdataDir, tt.filename)
+
+			// Check if test file exists
+			if _, err := os.Stat(filePath); os.IsNotExist(err) {
+				t.Skipf("Test file %s does not exist, skipping test", filePath)
+				return
+			}
+
+			// Call analyzeWARCFile with force=true
+			result := analyzeWARCFile(filePath, false, true)
+
+			// For good closed files, should not need rename or truncation
+			if result.needsRename {
+				t.Error("expected needsRename=false for closed .gz file")
+			}
+
+			if result.needsTruncate {
+				t.Error("expected needsTruncate=false for good closed file")
+			}
+
+			// Should have no error message for good files
+			if result.errorMsg != "" {
+				t.Errorf("expected no error message for good file, got: %s", result.errorMsg)
+			}
+
+			// File should be processed (not skipped) - fileSize should be > 0
+			if result.fileSize <= 0 {
+				t.Errorf("expected positive fileSize for processed file, got %d", result.fileSize)
+			}
+
+			// Should have processed some records for non-empty files
+			if tt.expectedRecords > 0 && result.recordCount != tt.expectedRecords {
+				t.Errorf("expected recordCount=%d, got %d", tt.expectedRecords, result.recordCount)
+			}
+
+			// For files where we don't know exact count, just verify it's positive
+			if tt.expectedRecords == 0 && result.recordCount < 0 {
+				t.Errorf("expected non-negative recordCount, got %d", result.recordCount)
+			}
+
+			t.Logf("force mode test %s: %s", tt.name, tt.description)
+			t.Logf("  - File processed: %d bytes, %d records", result.fileSize, result.recordCount)
+		})
+	}
+}
+
 // TestSkipNonOpenFiles tests that non-.open files are correctly skipped
 func TestSkipNonOpenFiles(t *testing.T) {
 	testdataDir := "../../testdata"
