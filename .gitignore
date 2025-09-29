@@ -5,3 +5,4 @@ output/**
 warc
 *.warc.gz
 *.warc.zst
+cmd/gowarc

@@ -5,14 +5,15 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"github.com/spf13/cobra"
 )
 
 // TestAnalyzeWARCFile tests the analysis of different WARC files
 func TestAnalyzeWARCFile(t *testing.T) {
-	testdataDir := "../../testdata"
+	testdataDir := "../../testdata/mend"
 
 	tests := []struct {
 		name            string
@@ -126,7 +127,7 @@ func TestAnalyzeWARCFile(t *testing.T) {
 
 // TestMendResultValidation tests that mendResult structs are properly populated
 func TestMendResultValidation(t *testing.T) {
-	testdataDir := "../../testdata"
+	testdataDir := "../../testdata/mend"
 
 	// Test a file that should have all fields populated
 	filePath := filepath.Join(testdataDir, "corrupted-trailing-bytes.warc.gz.open")
@@ -181,7 +182,7 @@ func TestMendResultValidation(t *testing.T) {
 
 // TestAnalyzeWARCFileForceMode tests analyzeWARCFile with force=true on good closed WARC files
 func TestAnalyzeWARCFileForceMode(t *testing.T) {
-	testdataDir := "../../testdata"
+	testdataDir := "../../testdata/mend"
 
 	tests := []struct {
 		name            string
@@ -253,7 +254,7 @@ func TestAnalyzeWARCFileForceMode(t *testing.T) {
 
 // TestSkipNonOpenFiles tests that non-.open files are correctly skipped
 func TestSkipNonOpenFiles(t *testing.T) {
-	testdataDir := "../../testdata"
+	testdataDir := "../../testdata/mend"
 	filePath := filepath.Join(testdataDir, "skip-non-open.warc.gz")
 
 	// Check if test file exists
@@ -326,10 +327,40 @@ var mendExpectedResults = map[string]expectedResult{
 	},
 }
 
-// TestMendOutputMatchesSynthetic verifies that our mend command produces
+// createMockCobraCommand creates a mock cobra command for testing the mend function directly
+func createMockCobraCommand() *cobra.Command {
+	// Create root command first
+	rootCmd := &cobra.Command{Use: "root"}
+	rootCmd.PersistentFlags().Bool("verbose", false, "Enable verbose logging")
+	// Also add to regular flags since mend accesses it via cmd.Root().Flags()
+	rootCmd.Flags().Bool("verbose", false, "Enable verbose logging")
+
+	// Create mend command as a subcommand
+	cmd := &cobra.Command{
+		Use: "mend",
+	}
+	// Add the same flags as the real mend command
+	cmd.Flags().Bool("dry-run", false, "Show what would be done without making changes")
+	cmd.Flags().BoolP("yes", "y", false, "Assume yes to all mend confirmations")
+	cmd.Flags().Bool("force", false, "Process all gzip WARC files, not just .open files")
+
+	// Add mend command to root to inherit persistent flags
+	rootCmd.AddCommand(cmd)
+
+	return cmd
+}
+
+// TestMendFunctionDirect verifies that the mend function produces
 // expected results on synthetic test data by comparing against pre-computed checksums
-func TestMendOutputMatchesSynthetic(t *testing.T) {
-	testdataDir := "../../testdata"
+func TestMendFunctionDirect(t *testing.T) {
+	// Get current directory and construct paths relative to workspace root
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("failed to get current directory: %v", err)
+	}
+	// From cmd/mend, go up to workspace root
+	workspaceRoot := filepath.Join(cwd, "../..")
+	testdataDir := filepath.Join(workspaceRoot, "testdata/mend")
 	outputDir := filepath.Join(testdataDir, "mend_test_output")
 
 	// Ensure output directory exists
@@ -347,20 +378,23 @@ func TestMendOutputMatchesSynthetic(t *testing.T) {
 				return
 			}
 
-			// Note: empty files are now handled with synthetic empty gzip data
-
-			// Create a copy for gowarc to process
+			// Create a copy for mend function to process
 			testFile := filepath.Join(outputDir, sourceFile)
 			if err := copyFile(sourceFilePath, testFile); err != nil {
 				t.Fatalf("failed to copy test file: %v", err)
 			}
 
-			// Process with gowarc mend
-			cmd := exec.Command("../../cmd/gowarc", "mend", "--yes", testFile)
-			output, err := cmd.CombinedOutput()
-			if err != nil {
-				t.Fatalf("gowarc mend failed: %v\nOutput: %s", err, output)
-			}
+			// Create a mock cobra command with the necessary flags
+			cmd := createMockCobraCommand()
+			cmd.Flags().Set("yes", "true")      // Auto-confirm all operations
+			cmd.Flags().Set("dry-run", "false") // Actually perform operations
+			cmd.Flags().Set("force", "false")   // Use normal .open file processing
+
+			// Set the root-level verbose flag
+			cmd.Root().Flags().Set("verbose", "false")
+
+			// Call mend function directly
+			mend(cmd, []string{testFile})
 
 			// Check that the expected output file exists
 			outputFile := filepath.Join(outputDir, expected.outputFile)
@@ -369,7 +403,7 @@ func TestMendOutputMatchesSynthetic(t *testing.T) {
 				return
 			}
 
-			// Calculate checksum of gowarc output
+			// Calculate checksum of mend output
 			actualChecksum, err := calculateChecksum(outputFile)
 			if err != nil {
 				t.Fatalf("failed to calculate checksum: %v", err)
@@ -436,4 +470,200 @@ func copyFile(src, dst string) error {
 	}
 
 	return destFile.Sync()
+}
+
+// TestIsGzipFile tests the gzip file detection function
+func TestIsGzipFile(t *testing.T) {
+	testdataDir := "../../testdata/mend"
+
+	tests := []struct {
+		name     string
+		filename string
+		expected bool
+	}{
+		{"good_gzip_file", "good.warc.gz.open", true},
+		{"empty_gzip_file", "empty.warc.gz.open", true},
+		{"corrupted_but_valid_gzip_header", "corrupted-trailing-bytes.warc.gz.open", true},
+		{"non_gzip_file_if_exists", "nonexistent.txt", false}, // Will return false due to file not existing
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			filepath := filepath.Join(testdataDir, tt.filename)
+
+			// Skip test if file doesn't exist (for non-gzip file test)
+			if _, err := os.Stat(filepath); os.IsNotExist(err) && tt.name == "non_gzip_file_if_exists" {
+				// Create a temporary non-gzip file for testing
+				tempFile, err := os.CreateTemp("", "test_non_gzip_*.txt")
+				if err != nil {
+					t.Fatalf("failed to create temp file: %v", err)
+				}
+				defer os.Remove(tempFile.Name())
+				defer tempFile.Close()
+
+				// Write some non-gzip content
+				tempFile.WriteString("This is not a gzip file")
+				tempFile.Close()
+
+				filepath = tempFile.Name()
+			}
+
+			if _, err := os.Stat(filepath); os.IsNotExist(err) {
+				t.Skipf("Test file %s does not exist, skipping test", filepath)
+				return
+			}
+
+			result := isGzipFile(filepath)
+			if result != tt.expected {
+				t.Errorf("isGzipFile(%s) = %v, expected %v", tt.filename, result, tt.expected)
+			}
+		})
+	}
+}
+
+// TestTruncateFile tests the file truncation function
+func TestTruncateFile(t *testing.T) {
+	// Create a temporary file for testing
+	tempFile, err := os.CreateTemp("", "test_truncate_*.dat")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	defer os.Remove(tempFile.Name())
+	defer tempFile.Close()
+
+	// Write some test data
+	testData := "This is a test file with some content that will be truncated."
+	_, err = tempFile.WriteString(testData)
+	if err != nil {
+		t.Fatalf("failed to write test data: %v", err)
+	}
+	tempFile.Close()
+
+	// Test truncation at position 20
+	truncatePos := int64(20)
+	err = truncateFile(tempFile.Name(), truncatePos)
+	if err != nil {
+		t.Errorf("truncateFile failed: %v", err)
+	}
+
+	// Verify file was truncated correctly
+	stat, err := os.Stat(tempFile.Name())
+	if err != nil {
+		t.Fatalf("failed to stat truncated file: %v", err)
+	}
+
+	if stat.Size() != truncatePos {
+		t.Errorf("file size after truncation = %d, expected %d", stat.Size(), truncatePos)
+	}
+
+	// Verify content is correct
+	truncatedFile, err := os.Open(tempFile.Name())
+	if err != nil {
+		t.Fatalf("failed to open truncated file: %v", err)
+	}
+	defer truncatedFile.Close()
+
+	content, err := io.ReadAll(truncatedFile)
+	if err != nil {
+		t.Fatalf("failed to read truncated file: %v", err)
+	}
+
+	expectedContent := testData[:truncatePos]
+	if string(content) != expectedContent {
+		t.Errorf("truncated content = %q, expected %q", string(content), expectedContent)
+	}
+}
+
+// TestFormatBytes tests the byte formatting function
+func TestFormatBytes(t *testing.T) {
+	tests := []struct {
+		bytes    int64
+		expected string
+	}{
+		{0, "0 B"},
+		{100, "100 B"},
+		{1023, "1023 B"},
+		{1024, "1.0 KB"},
+		{1536, "1.5 KB"},
+		{1024 * 1024, "1.0 MB"},
+		{1024*1024 + 512*1024, "1.5 MB"},
+		{1024 * 1024 * 1024, "1.0 GB"},
+		{1024*1024*1024*1024 + 512*1024*1024*1024, "1.5 TB"},
+	}
+
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("%d_bytes", tt.bytes), func(t *testing.T) {
+			result := formatBytes(tt.bytes)
+			if result != tt.expected {
+				t.Errorf("formatBytes(%d) = %q, expected %q", tt.bytes, result, tt.expected)
+			}
+		})
+	}
+}
+
+// TestConfirmAction tests the confirmation prompt function
+func TestConfirmAction(t *testing.T) {
+	// Test auto-yes functionality
+	result := confirmAction("Test prompt", true)
+	if !result {
+		t.Error("confirmAction with autoYes=true should return true")
+	}
+}
+
+// TestMendDryRun tests the mend function in dry-run mode
+func TestMendDryRun(t *testing.T) {
+	testdataDir := "../../testdata/mend"
+	tempDir, err := os.MkdirTemp("", "mend_dry_run_test_*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Test with a file that needs truncation
+	sourceFile := filepath.Join(testdataDir, "corrupted-trailing-bytes.warc.gz.open")
+	if _, err := os.Stat(sourceFile); os.IsNotExist(err) {
+		t.Skip("Test file does not exist, skipping dry-run test")
+	}
+
+	// Copy test file
+	testFile := filepath.Join(tempDir, "test.warc.gz.open")
+	if err := copyFile(sourceFile, testFile); err != nil {
+		t.Fatalf("failed to copy test file: %v", err)
+	}
+
+	// Get original file info
+	originalInfo, err := os.Stat(testFile)
+	if err != nil {
+		t.Fatalf("failed to stat original file: %v", err)
+	}
+
+	// Create mock command with dry-run enabled
+	cmd := createMockCobraCommand()
+	cmd.Flags().Set("dry-run", "true")
+	cmd.Flags().Set("yes", "true")
+
+	// Set the root-level verbose flag
+	cmd.Root().Flags().Set("verbose", "false")
+
+	// Call mend in dry-run mode
+	mend(cmd, []string{testFile})
+
+	// Verify file was not actually modified
+	afterInfo, err := os.Stat(testFile)
+	if err != nil {
+		t.Fatalf("failed to stat file after dry-run: %v", err)
+	}
+
+	if originalInfo.Size() != afterInfo.Size() {
+		t.Errorf("dry-run should not modify file size: original=%d, after=%d", originalInfo.Size(), afterInfo.Size())
+	}
+
+	if originalInfo.ModTime() != afterInfo.ModTime() {
+		t.Errorf("dry-run should not modify file: original mod time=%v, after=%v", originalInfo.ModTime(), afterInfo.ModTime())
+	}
+
+	// Verify .open file still exists (not renamed)
+	if _, err := os.Stat(testFile); os.IsNotExist(err) {
+		t.Error("dry-run should not rename file, but original file is missing")
+	}
 }
