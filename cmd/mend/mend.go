@@ -62,10 +62,29 @@ type mendStats struct {
 }
 
 func mend(cmd *cobra.Command, files []string) {
-	dryRun, _ := cmd.Flags().GetBool("dry-run")
-	autoYes, _ := cmd.Flags().GetBool("yes")
-	force, _ := cmd.Flags().GetBool("force")
-	verbose, _ := cmd.Root().Flags().GetBool("verbose")
+	dryRun, err := cmd.Flags().GetBool("dry-run")
+	if err != nil {
+		slog.Error("failed to get dry-run flag", "error", err)
+		return
+	}
+
+	autoYes, err := cmd.Flags().GetBool("yes")
+	if err != nil {
+		slog.Error("failed to get yes flag", "error", err)
+		return
+	}
+
+	force, err := cmd.Flags().GetBool("force")
+	if err != nil {
+		slog.Error("failed to get force flag", "error", err)
+		return
+	}
+
+	verbose, err := cmd.Root().Flags().GetBool("verbose")
+	if err != nil {
+		slog.Error("failed to get verbose flag", "error", err)
+		return
+	}
 
 	// Initialize statistics
 	stats := mendStats{
