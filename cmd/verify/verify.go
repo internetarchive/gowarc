@@ -258,13 +258,10 @@ func verifyWARCVersion(record *warc.Record, filepath string) (valid bool) {
 
 	// Check for corrupted version data (indicates WARC reader parsing bug)
 	if strings.Contains(record.Version, "\r") || strings.Contains(record.Version, "\n") {
-		slog.Debug("WARC version parsing appears corrupted, skipping validation", "file", filepath, "recordID", record.Header.Get("WARC-Record-ID"), "found", record.Version)
-		// Skip validation for corrupted version data to avoid false positives
-		return valid
-	}
-
-	// Normal version validation for properly parsed versions
-	if record.Version != "WARC/1.0" && record.Version != "WARC/1.1" {
+		slog.Error("WARC version contains invalid characters", "file", filepath, "recordID", record.Header.Get("WARC-Record-ID"), "found", record.Version)
+		valid = false
+	} else if record.Version != "WARC/1.0" && record.Version != "WARC/1.1" {
+		// Normal version validation for properly parsed versions
 		slog.Error("invalid WARC version", "file", filepath, "recordID", record.Header.Get("WARC-Record-ID"), "found", record.Version, "expected", "WARC/1.0 or WARC/1.1")
 		valid = false
 	}
