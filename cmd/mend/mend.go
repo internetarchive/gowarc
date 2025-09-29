@@ -49,16 +49,16 @@ type mendResult struct {
 }
 
 type mendStats struct {
-	totalFiles      int
-	processedFiles  int
-	skippedFiles    int
-	truncatedFiles  int
-	renamedFiles    int
-	errorFiles      int
-	totalBytesSaved int64
-	totalRecords    int
-	startTime       time.Time
-	dryRun          bool
+	totalFiles          int
+	processedFiles      int
+	skippedFiles        int
+	truncatedFiles      int
+	renamedFiles        int
+	errorFiles          int
+	totalBytesTruncated int64
+	totalRecords        int
+	startTime           time.Time
+	dryRun              bool
 }
 
 func mend(cmd *cobra.Command, files []string) {
@@ -147,7 +147,7 @@ func mend(cmd *cobra.Command, files []string) {
 					}
 					slog.Info("truncated file", "file", filepath, "at", result.truncateAt)
 					stats.truncatedFiles++
-					stats.totalBytesSaved += result.fileSize - result.truncateAt
+					stats.totalBytesTruncated += result.fileSize - result.truncateAt
 				}
 			}
 
@@ -167,7 +167,7 @@ func mend(cmd *cobra.Command, files []string) {
 			if result.needsTruncate {
 				slog.Info("would truncate file", "file", filepath, "at", result.truncateAt, "dryRun", true)
 				stats.truncatedFiles++
-				stats.totalBytesSaved += result.fileSize - result.truncateAt
+				stats.totalBytesTruncated += result.fileSize - result.truncateAt
 			}
 			if result.needsRename {
 				slog.Info("would rename file", "from", filepath, "to", result.newName, "dryRun", true)
@@ -379,8 +379,8 @@ func displaySummary(stats mendStats) {
 		if stats.dryRun {
 			verb = "would truncate"
 		}
-		if stats.totalBytesSaved > 0 {
-			parts = append(parts, fmt.Sprintf("%d %s (saved %s)", stats.truncatedFiles, verb, formatBytes(stats.totalBytesSaved)))
+		if stats.totalBytesTruncated > 0 {
+			parts = append(parts, fmt.Sprintf("%d %s (truncated %s)", stats.truncatedFiles, verb, formatBytes(stats.totalBytesTruncated)))
 		} else {
 			parts = append(parts, fmt.Sprintf("%d %s", stats.truncatedFiles, verb))
 		}
@@ -419,7 +419,7 @@ func displaySummary(stats mendStats) {
 		"dryRun", stats.dryRun,
 		"files", stats.totalFiles,
 		"records", stats.totalRecords,
-		"bytesSaved", stats.totalBytesSaved)
+		"bytesTruncated", stats.totalBytesTruncated)
 }
 
 // formatBytes formats a byte count as a human-readable string

@@ -157,7 +157,7 @@ func verifyPayloadDigest(record *warc.Record, filepath string) (errorsCount int,
 	// WARC-Payload-Digest is optional in both WARC 1.0 and 1.1 specifications
 	// If it's not present, that's perfectly valid - just return success
 	if record.Header.Get("WARC-Payload-Digest") == "" {
-		slog.Debug("WARC-Payload-Digest not present (this is optional)", "file", filepath, "recordID", record.Header.Get("WARC-Record-ID"))
+		slog.Debug("WARC-Payload-Digest not present (optional but highly recommended for deduplication)", "file", filepath, "recordID", record.Header.Get("WARC-Record-ID"))
 		return errorsCount, valid
 	}
 
@@ -182,7 +182,7 @@ func verifyPayloadDigest(record *warc.Record, filepath string) (errorsCount int,
 
 	if resp.Header.Get("X-Crawler-Transfer-Encoding") != "" || resp.Header.Get("X-Crawler-Content-Encoding") != "" {
 		// This header being present in the HTTP headers indicates transfer-encoding and/or content-encoding were incorrectly stripped, causing us to not be able to verify the payload digest.
-		slog.Error("malfomed headers prevent accurate payload digest calculation", "file", filepath, "recordID", record.Header.Get("WARC-Record-ID"))
+		slog.Error("malformed headers prevent accurate payload digest calculation", "file", filepath, "recordID", record.Header.Get("WARC-Record-ID"))
 
 		valid = false
 		errorsCount++
