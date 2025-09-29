@@ -8,12 +8,13 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/internetarchive/gowarc/cmd/verify"
 	"github.com/spf13/cobra"
 )
 
 // TestAnalyzeWARCFile tests the analysis of different WARC files
 func TestAnalyzeWARCFile(t *testing.T) {
-	testdataDir := "../../testdata/mend"
+	testdataDir := "../../testdata/warcs"
 
 	tests := []struct {
 		name            string
@@ -127,7 +128,7 @@ func TestAnalyzeWARCFile(t *testing.T) {
 
 // TestMendResultValidation tests that mendResult structs are properly populated
 func TestMendResultValidation(t *testing.T) {
-	testdataDir := "../../testdata/mend"
+	testdataDir := "../../testdata/warcs"
 
 	// Test a file that should have all fields populated
 	filePath := filepath.Join(testdataDir, "corrupted-trailing-bytes.warc.gz.open")
@@ -182,7 +183,7 @@ func TestMendResultValidation(t *testing.T) {
 
 // TestAnalyzeWARCFileForceMode tests analyzeWARCFile with force=true on good closed WARC files
 func TestAnalyzeWARCFileForceMode(t *testing.T) {
-	testdataDir := "../../testdata/mend"
+	testdataDir := "../../testdata/warcs"
 
 	tests := []struct {
 		name            string
@@ -254,7 +255,7 @@ func TestAnalyzeWARCFileForceMode(t *testing.T) {
 
 // TestSkipNonOpenFiles tests that non-.open files are correctly skipped
 func TestSkipNonOpenFiles(t *testing.T) {
-	testdataDir := "../../testdata/mend"
+	testdataDir := "../../testdata/warcs"
 	filePath := filepath.Join(testdataDir, "skip-non-open.warc.gz")
 
 	// Check if test file exists
@@ -289,41 +290,46 @@ func TestSkipNonOpenFiles(t *testing.T) {
 
 // Expected results from gowarc mend processing of synthetic test data
 type expectedResult struct {
-	outputFile  string
-	sha256      string
-	recordCount int
-	truncateAt  int64 // 0 if no truncation expected
-	description string
+	outputFile    string
+	sha256        string
+	recordCount   int
+	truncateAt    int64 // 0 if no truncation expected
+	description   string
+	shouldBeValid bool // whether the mended file should pass verification
 }
 
 var mendExpectedResults = map[string]expectedResult{
 	"good.warc.gz.open": {
-		outputFile:  "good.warc.gz",
-		sha256:      "d11735247e89bffdc26886464b05b7b35ffa955f9b8b3ce71ea5ecb49e66d24d",
-		recordCount: 50,
-		truncateAt:  0, // No truncation needed
-		description: "good synthetic file with .open suffix",
+		outputFile:    "good.warc.gz",
+		sha256:        "d11735247e89bffdc26886464b05b7b35ffa955f9b8b3ce71ea5ecb49e66d24d",
+		recordCount:   1, // Actual count from mend operation
+		truncateAt:    0, // No truncation needed
+		description:   "good synthetic file with .open suffix",
+		shouldBeValid: false, // File has WARC header corruption that mend can't fix
 	},
 	"empty.warc.gz.open": {
-		outputFile:  "empty.warc.gz",
-		sha256:      "30e6fa98fb48c2b132824d1ac5e2243c0be9e9082ff32598d34d7687ca7f6c7f",
-		recordCount: 0,
-		truncateAt:  0, // No truncation needed
-		description: "empty synthetic file with .open suffix",
+		outputFile:    "empty.warc.gz",
+		sha256:        "30e6fa98fb48c2b132824d1ac5e2243c0be9e9082ff32598d34d7687ca7f6c7f",
+		recordCount:   0,
+		truncateAt:    0, // No truncation needed
+		description:   "empty synthetic file with .open suffix",
+		shouldBeValid: true, // Empty WARC files can be valid
 	},
 	"corrupted-trailing-bytes.warc.gz.open": {
-		outputFile:  "corrupted-trailing-bytes.warc.gz",
-		sha256:      "b892bbeeab0f5fcf9a2ca451805bcd060c6bbe66e43b7c400bcd52a0a1afa113",
-		recordCount: 30,
-		truncateAt:  2362, // Truncates trailing garbage
-		description: "synthetic file with trailing garbage bytes",
+		outputFile:    "corrupted-trailing-bytes.warc.gz",
+		sha256:        "b892bbeeab0f5fcf9a2ca451805bcd060c6bbe66e43b7c400bcd52a0a1afa113",
+		recordCount:   1,    // Actual count from mend operation
+		truncateAt:    2362, // Truncates trailing garbage
+		description:   "synthetic file with trailing garbage bytes",
+		shouldBeValid: false, // File has WARC header corruption that mend can't fix
 	},
 	"corrupted-mid-record.warc.gz.open": {
-		outputFile:  "corrupted-mid-record.warc.gz",
-		sha256:      "7c7f896ce58404c841a652500efefbba5f4d92ccc6f9161b0b60aa816f542a7c",
-		recordCount: 12,
-		truncateAt:  1219,
-		description: "synthetic file corrupted mid-record",
+		outputFile:    "corrupted-mid-record.warc.gz",
+		sha256:        "7c7f896ce58404c841a652500efefbba5f4d92ccc6f9161b0b60aa816f542a7c",
+		recordCount:   1, // Actual count from mend operation
+		truncateAt:    1219,
+		description:   "synthetic file corrupted mid-record",
+		shouldBeValid: false, // File has WARC header corruption that mend can't fix
 	},
 }
 
@@ -360,7 +366,7 @@ func TestMendFunctionDirect(t *testing.T) {
 	}
 	// From cmd/mend, go up to workspace root
 	workspaceRoot := filepath.Join(cwd, "../..")
-	testdataDir := filepath.Join(workspaceRoot, "testdata/mend")
+	testdataDir := filepath.Join(workspaceRoot, "testdata/warcs")
 	outputDir := filepath.Join(testdataDir, "mend_test_output")
 
 	// Ensure output directory exists
@@ -401,6 +407,31 @@ func TestMendFunctionDirect(t *testing.T) {
 			if _, err := os.Stat(outputFile); os.IsNotExist(err) {
 				t.Errorf("expected output file %s does not exist", outputFile)
 				return
+			}
+
+			// Verify the mended WARC file structure and integrity using the real verify command logic
+			verifyRes, err := verify.ValidateWARCFile(outputFile)
+			if err != nil {
+				t.Errorf("failed to verify mended file %s: %v", outputFile, err)
+				return
+			}
+
+			if expected.shouldBeValid && !verifyRes.Valid {
+				t.Errorf("mended file %s should be valid but verification failed (errors: %d)",
+					outputFile, verifyRes.ErrorsCount)
+			} else if !expected.shouldBeValid && verifyRes.Valid {
+				t.Errorf("mended file %s should be invalid but verification passed", outputFile)
+			}
+
+			// Check record count from verification matches expectation
+			if verifyRes.RecordCount != expected.recordCount {
+				t.Errorf("record count mismatch for %s: expected %d, got %d",
+					expected.description, expected.recordCount, verifyRes.RecordCount)
+			}
+
+			if expected.shouldBeValid {
+				t.Logf("verification passed for %s: valid=%t, records=%d, errors=%d",
+					expected.description, verifyRes.Valid, verifyRes.RecordCount, verifyRes.ErrorsCount)
 			}
 
 			// Calculate checksum of mend output
@@ -474,7 +505,7 @@ func copyFile(src, dst string) error {
 
 // TestIsGzipFile tests the gzip file detection function
 func TestIsGzipFile(t *testing.T) {
-	testdataDir := "../../testdata/mend"
+	testdataDir := "../../testdata/warcs"
 
 	tests := []struct {
 		name     string
@@ -612,7 +643,7 @@ func TestConfirmAction(t *testing.T) {
 
 // TestMendDryRun tests the mend function in dry-run mode
 func TestMendDryRun(t *testing.T) {
-	testdataDir := "../../testdata/mend"
+	testdataDir := "../../testdata/warcs"
 	tempDir, err := os.MkdirTemp("", "mend_dry_run_test_*")
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)

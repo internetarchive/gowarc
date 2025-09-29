@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"runtime"
 	"strings"
-	"sync"
 	"time"
 
 	warc "github.com/internetarchive/gowarc"
@@ -25,15 +24,15 @@ var Command = &cobra.Command{
 }
 
 func init() {
-	Command.Flags().IntP("threads", "t", runtime.NumCPU(), "Number of threads to use for verification")
+	Command.Flags().IntP("threads", "t", runtime.NumCPU(), "Number of threads to use for verification (currently unused - kept for compatibility)")
 }
 
-type result struct {
-	warcVersionValid         bool
-	blockDigestErrorsCount   int
-	blockDigestValid         bool
-	payloadDigestErrorsCount int
-	payloadDigestValid       bool
+// ValidationResult holds the result of WARC file validation
+type ValidationResult struct {
+	Valid          bool
+	RecordCount    int
+	ErrorsCount    int
+	AllRecordsRead bool
 }
 
 func verify(cmd *cobra.Command, files []string) {
@@ -41,114 +40,86 @@ func verify(cmd *cobra.Command, files []string) {
 
 	for _, filepath := range files {
 		startTime := time.Now()
-		valid := true
-		allRecordsRead := false
-		errorsCount := 0
-		recordCount := 0
-
-		recordChan := make(chan *warc.Record, threads*2)
-		results := make(chan result, threads*2)
-
-		var processWg sync.WaitGroup
-		var recordReaderWg sync.WaitGroup
 
 		if !cmd.Root().Flags().Lookup("json").Changed {
 			// Output the message if not in --json mode
 			slog.Info("verifying", "file", filepath, "threads", threads)
 		}
-		for range threads {
-			processWg.Add(1)
-			go func() {
-				defer processWg.Done()
-				for record := range recordChan {
-					processVerifyRecord(record, filepath, results)
-					record.Content.Close()
-				}
-			}()
-		}
 
-		reader, f, err := utils.OpenWARCFile(filepath)
+		// Use the shared validation logic
+		result, err := ValidateWARCFile(filepath)
 		if err != nil {
-			return
+			slog.Error("failed to validate file", "file", filepath, "error", err)
+			continue
 		}
-		defer f.Close()
 
-		// Read records and send them to workers
-		recordReaderWg.Add(1)
-		go func() {
-			defer recordReaderWg.Done()
-			defer close(recordChan)
-			for {
-				record, err := reader.ReadRecord()
-				if err != nil {
-					if err == io.EOF {
-						allRecordsRead = true
-						break
-					}
-					if record == nil {
-						slog.Error("failed to read record", "err", err.Error(), "file", filepath)
-					} else {
-						slog.Error("failed to read record", "err", err.Error(), "file", filepath, "recordID", record.Header.Get("WARC-Record-ID"))
-					}
-					errorsCount++
-					valid = false
-					return
-				}
-				recordCount++
-
-				if utils.ShouldSkipRecord(record) {
-					continue
-				}
-
-				recordChan <- record
-			}
-		}()
-
-		// Collect results from workers
-
-		recordReaderWg.Add(1)
-		go func() {
-			defer recordReaderWg.Done()
-			for res := range results {
-				if !res.blockDigestValid {
-					valid = false
-					errorsCount += res.blockDigestErrorsCount
-				}
-				if !res.payloadDigestValid {
-					valid = false
-					errorsCount += res.payloadDigestErrorsCount
-				}
-				if !res.warcVersionValid {
-					valid = false
-					errorsCount++
-				}
-			}
-		}()
-
-		processWg.Wait()
-		close(results)
-		recordReaderWg.Wait()
-
-		if recordCount == 0 {
+		if result.RecordCount == 0 {
 			slog.Error("no record in file", "file", filepath)
 		}
 
 		// Ensure there is a visible difference when errors are present.
-		if errorsCount > 0 {
-			slog.Error(fmt.Sprintf("checked in %s", time.Since(startTime).String()), "file", filepath, "valid", valid, "errors", errorsCount, "count", recordCount, "allRecordsRead", allRecordsRead)
+		if result.ErrorsCount > 0 {
+			slog.Error(fmt.Sprintf("checked in %s", time.Since(startTime).String()), "file", filepath, "valid", result.Valid, "errors", result.ErrorsCount, "count", result.RecordCount, "allRecordsRead", result.AllRecordsRead)
 		} else {
-			slog.Info(fmt.Sprintf("checked in %s", time.Since(startTime).String()), "file", filepath, "valid", valid, "errors", errorsCount, "count", recordCount, "allRecordsRead", allRecordsRead)
+			slog.Info(fmt.Sprintf("checked in %s", time.Since(startTime).String()), "file", filepath, "valid", result.Valid, "errors", result.ErrorsCount, "count", result.RecordCount, "allRecordsRead", result.AllRecordsRead)
 		}
-
 	}
 }
 
-func processVerifyRecord(record *warc.Record, filepath string, results chan<- result) {
-	var res result
-	res.blockDigestErrorsCount, res.blockDigestValid = verifyBlockDigest(record, filepath)
-	res.payloadDigestErrorsCount, res.payloadDigestValid = verifyPayloadDigest(record, filepath)
-	res.warcVersionValid = verifyWARCVersion(record, filepath)
-	results <- res
+// ValidateWARCFile validates a single WARC file and returns structured results
+func ValidateWARCFile(filepath string) (ValidationResult, error) {
+	validation := ValidationResult{}
+
+	reader, f, err := utils.OpenWARCFile(filepath)
+	if err != nil {
+		return validation, fmt.Errorf("failed to open WARC file: %w", err)
+	}
+	defer f.Close()
+
+	validation.Valid = true
+
+	// Read records and validate them
+	for {
+		record, err := reader.ReadRecord()
+		if err != nil {
+			if err == io.EOF {
+				validation.AllRecordsRead = true
+				break
+			}
+			validation.Valid = false
+			validation.ErrorsCount++
+			break
+		}
+		validation.RecordCount++
+
+		if utils.ShouldSkipRecord(record) {
+			record.Content.Close()
+			continue
+		}
+
+		// Use the existing validation functions
+		blockDigestErrorsCount, blockDigestValid := verifyBlockDigest(record, filepath)
+		payloadDigestErrorsCount, payloadDigestValid := verifyPayloadDigest(record, filepath)
+		warcVersionValid := verifyWARCVersion(record, filepath)
+
+		// Aggregate results
+		if !blockDigestValid {
+			validation.Valid = false
+			validation.ErrorsCount += blockDigestErrorsCount
+		}
+		if !payloadDigestValid {
+			validation.Valid = false
+			validation.ErrorsCount += payloadDigestErrorsCount
+		}
+		if !warcVersionValid {
+			validation.Valid = false
+			validation.ErrorsCount++
+		}
+
+		record.Content.Close()
+	}
+
+	return validation, nil
 }
 
 func verifyPayloadDigest(record *warc.Record, filepath string) (errorsCount int, valid bool) {
