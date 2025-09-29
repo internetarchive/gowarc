@@ -119,6 +119,8 @@ In addition to the Go library, gowarc provides several command-line utilities fo
 
 ### Installation
 
+Pre-built releases are available on the [GitHub releases page](https://github.com/internetarchive/gowarc/releases).
+
 ```bash
 # Install from source
 go install github.com/internetarchive/gowarc/cmd@latest
