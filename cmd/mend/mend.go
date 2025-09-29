@@ -36,16 +36,17 @@ func init() {
 }
 
 type mendResult struct {
-	filepath      string
-	needsTruncate bool
-	truncateAt    int64
-	needsRename   bool
-	newName       string
-	lastValidPos  int64
-	fileSize      int64
-	recordCount   int
-	errorAt       int64
-	errorMsg      string
+	filepath        string
+	needsTruncate   bool
+	truncateAt      int64
+	needsRename     bool
+	newName         string
+	lastValidPos    int64
+	fileSize        int64
+	recordCount     int
+	firstRecordType string
+	errorAt         int64
+	errorMsg        string
 }
 
 type mendStats struct {
@@ -54,6 +55,7 @@ type mendStats struct {
 	skippedFiles        int
 	truncatedFiles      int
 	renamedFiles        int
+	deletedFiles        int
 	errorFiles          int
 	totalBytesTruncated int64
 	totalRecords        int
@@ -97,15 +99,53 @@ func mend(cmd *cobra.Command, files []string) {
 		result := analyzeWARCFile(filepath, verbose, force)
 
 		if !result.needsTruncate && !result.needsRename {
-			if result.recordCount > 0 {
+			if result.recordCount > 1 || (result.recordCount == 1 && result.firstRecordType != "warcinfo") {
 				slog.Info("file is ok", "file", filepath, "records", result.recordCount)
 				stats.processedFiles++
 				stats.totalRecords += result.recordCount
-			} else {
-				if verbose {
-					slog.Debug("file skipped", "file", filepath)
+			} else if result.recordCount == 1 && result.firstRecordType == "warcinfo" {
+				// File has only warcinfo record - ask user if it should be deleted
+				slog.Warn("unused WARC file detected", "file", filepath, "records", 1, "type", "warcinfo-only")
+
+				if !dryRun {
+					if confirmAction(fmt.Sprintf("delete unused WARC file %s? [y/N] ", filepath), autoYes) {
+						if err := os.Remove(filepath); err != nil {
+							slog.Error("failed to delete file", "file", filepath, "error", err)
+							stats.errorFiles++
+						} else {
+							slog.Info("deleted unused WARC file", "file", filepath)
+							stats.deletedFiles++
+						}
+					} else {
+						slog.Info("keeping unused WARC file", "file", filepath)
+						stats.processedFiles++
+						stats.totalRecords += result.recordCount
+					}
+				} else {
+					slog.Info("would delete unused WARC file", "file", filepath, "dryRun", true)
+					stats.deletedFiles++
 				}
-				stats.skippedFiles++
+			} else {
+				// File has 0 records - ask user if it should be deleted
+				slog.Warn("empty file detected", "file", filepath, "records", 0)
+
+				if !dryRun {
+					if confirmAction(fmt.Sprintf("delete empty file %s? [y/N] ", filepath), autoYes) {
+						if err := os.Remove(filepath); err != nil {
+							slog.Error("failed to delete file", "file", filepath, "error", err)
+							stats.errorFiles++
+						} else {
+							slog.Info("deleted empty file", "file", filepath)
+							stats.deletedFiles++
+						}
+					} else {
+						slog.Info("keeping empty file", "file", filepath)
+						stats.processedFiles++
+					}
+				} else {
+					slog.Info("would delete empty file", "file", filepath, "dryRun", true)
+					stats.deletedFiles++
+				}
 			}
 			continue
 		}
@@ -289,6 +329,11 @@ func analyzeWARCFile(filepath string, verbose bool, force bool) mendResult {
 
 		result.recordCount++
 
+		// Capture the first record's type for special handling
+		if result.recordCount == 1 {
+			result.firstRecordType = record.Header.Get("WARC-Type")
+		}
+
 		// Verify we have valid offset/size from compressed WARC
 		if record.Offset < 0 || record.Size <= 0 {
 			result.errorMsg = "invalid offset/size in compressed WARC record"
@@ -392,6 +437,14 @@ func displaySummary(stats mendStats) {
 			verb = "would rename"
 		}
 		parts = append(parts, fmt.Sprintf("%d %s", stats.renamedFiles, verb))
+	}
+
+	if stats.deletedFiles > 0 {
+		verb := "deleted"
+		if stats.dryRun {
+			verb = "would delete"
+		}
+		parts = append(parts, fmt.Sprintf("%d %s", stats.deletedFiles, verb))
 	}
 
 	if stats.skippedFiles > 0 {
