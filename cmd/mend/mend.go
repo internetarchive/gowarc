@@ -152,7 +152,8 @@ func mend(cmd *cobra.Command, files []string) {
 			}
 
 			if result.needsRename {
-				if confirmAction(fmt.Sprintf("remove .open suffix from %s? [y/N] ", filepath), autoYes) {
+				// Auto-rename if no truncation was needed (file is valid, just needs .open suffix removed)
+				if !result.needsTruncate || confirmAction(fmt.Sprintf("remove .open suffix from %s? [y/N] ", filepath), autoYes) {
 					if err := os.Rename(filepath, result.newName); err != nil {
 						slog.Error("failed to rename file", "file", filepath, "error", err)
 						continue
