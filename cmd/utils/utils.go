@@ -41,15 +41,15 @@ func OpenWARCFile(filepath string) (*warc.Reader, *os.File, error) {
 
 // ShouldSkipRecord determines if a WARC record should be skipped during processing
 func ShouldSkipRecord(record *warc.Record) bool {
-	// Only process Content-Type: application/http; msgtype=response
-	if !strings.Contains(record.Header.Get("Content-Type"), "msgtype=response") {
-		slog.Debug("skipping record with Content-Type", "contentType", record.Header.Get("Content-Type"), "recordID", record.Header.Get("WARC-Record-ID"))
-		return true
-	}
-
 	// Skip revisit records
 	if record.Header.Get("WARC-Type") == "revisit" {
 		slog.Debug("skipping revisit record", "recordID", record.Header.Get("WARC-Record-ID"))
+		return true
+	}
+
+	// Only process Content-Type: application/http; msgtype=response
+	if !strings.Contains(record.Header.Get("Content-Type"), "msgtype=response") {
+		slog.Debug("skipping record with Content-Type", "contentType", record.Header.Get("Content-Type"), "recordID", record.Header.Get("WARC-Record-ID"))
 		return true
 	}
 
