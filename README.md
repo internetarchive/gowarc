@@ -33,83 +33,86 @@ This library's biggest feature is to provide a standard HTTP client through whic
 package main
 
 import (
-    "github.com/internetarchive/gowarc"
-    "net/http"
-    "time"
+	"context"
+	"fmt"
+	"github.com/internetarchive/gowarc"
+	"io"
+	"net/http"
+	"time"
 )
 
 func main() {
-    // Configure WARC settings
-    rotatorSettings := &warc.RotatorSettings{
-        WarcinfoContent: warc.Header{
-            "software": "My WARC writing client v1.0",
-        },
-        Prefix: "WEB",
-        Compression: "gzip",
-        WARCWriterPoolSize: 4, // Records will be written to 4 WARC files in parallel, it helps maximize the disk IO on some hardware. To be noted, even if we have multiple WARC writers, WARCs are ALWAYS written by pair in the same file. (req/resp pair)
-    }
+	// Configure WARC settings
+	rotatorSettings := &warc.RotatorSettings{
+		WarcinfoContent: warc.Header{
+			"software": "My WARC writing client v1.0",
+		},
+		Prefix:             "WEB",
+		Compression:        "gzip",
+		WARCWriterPoolSize: 4, // Records will be written to 4 WARC files in parallel, it helps maximize the disk IO on some hardware. To be noted, even if we have multiple WARC writers, WARCs are ALWAYS written by pair in the same file. (req/resp pair)
+	}
 
-    // Configure HTTP client settings
-    clientSettings := warc.HTTPClientSettings{
-        RotatorSettings: rotatorSettings,
-        Proxy: "socks5://proxy.example.com:1080",
-        TempDir: "./temp",
-        DNSServers: []string{"8.8.8.8", "8.8.4.4"},
-        DedupeOptions: warc.DedupeOptions{
-            LocalDedupe: true,
-            CDXDedupe: false,
-            SizeThreshold: 2048, // Only payloads above that threshold will be deduped
-        },
-        DialTimeout: 10 * time.Second,
-        ResponseHeaderTimeout: 30 * time.Second,
-        DNSResolutionTimeout: 5 * time.Second,
-        DNSRecordsTTL: 5 * time.Minute,
-        DNSCacheSize: 10000,
-        MaxReadBeforeTruncate: 1000000000,
-        DecompressBody: true,
-        FollowRedirects: true,
-        VerifyCerts: true,
-        RandomLocalIP: true,
-    }
+	// Configure HTTP client settings
+	clientSettings := warc.HTTPClientSettings{
+		RotatorSettings: rotatorSettings,
+		Proxy:           "socks5://proxy.example.com:1080",
+		TempDir:         "./temp",
+		DNSServers:      []string{"8.8.8.8", "8.8.4.4"},
+		DedupeOptions: warc.DedupeOptions{
+			LocalDedupe:   true,
+			CDXDedupe:     false,
+			SizeThreshold: 2048, // Only payloads above that threshold will be deduped
+		},
+		DialTimeout:           10 * time.Second,
+		ResponseHeaderTimeout: 30 * time.Second,
+		DNSResolutionTimeout:  5 * time.Second,
+		DNSRecordsTTL:         5 * time.Minute,
+		DNSCacheSize:          10000,
+		MaxReadBeforeTruncate: 1000000000,
+		DecompressBody:        true,
+		FollowRedirects:       true,
+		VerifyCerts:           true,
+		RandomLocalIP:         true,
+	}
 
-    // Create HTTP client
-    client, err := warc.NewWARCWritingHTTPClient(clientSettings)
-    if err != nil {
-        panic(err)
-    }
-    defer client.Close()
+	// Create HTTP client
+	client, err := warc.NewWARCWritingHTTPClient(clientSettings)
+	if err != nil {
+		panic(err)
+	}
+	defer client.Close()
 
-    // The error channel NEED to be consumed, else it will block the
-    // execution of the WARC module
-    go func() {
-		for err := range client.Client.ErrChan {
+	// The error channel NEED to be consumed, else it will block the
+	// execution of the WARC module
+	go func() {
+		for err := range client.ErrChan {
 			fmt.Errorf("WARC writer error: %s", err.Err.Error())
 		}
 	}()
 
-    // This is optional but the module give a feedback on a channel passed as context value "feedback" to the
-    // request, this helps knowing when the record has been written to disk. If this is not used, the WARC
-    // writing is asynchronous
+	// This is optional but the module give a feedback on a channel passed as context value "feedback" to the
+	// request, this helps knowing when the record has been written to disk. If this is not used, the WARC
+	// writing is asynchronous
 	req, err := http.NewRequest("GET", "https://archive.org", nil)
 	if err != nil {
 		panic(err)
 	}
 
-    feedbackChan := make(chan struct{}, 1)
-	req := req.WithContext(context.WithValue(req.Context(), "feedback", feedbackChan))
+	feedbackChan := make(chan struct{}, 1)
+	req = req.WithContext(context.WithValue(req.Context(), "feedback", feedbackChan))
 
-    resp, err := client.Do(req)
-    if err != nil {
-        panic(err)
-    }
-    defer resp.Body.Close()
+	resp, err := client.Do(req)
+	if err != nil {
+		panic(err)
+	}
+	defer resp.Body.Close()
 
-    // Process response
-    // Note: the body NEED to be consumed to be written to the WARC file.
-    io.Copy(io.Discard, resp.Body)
+	// Process response
+	// Note: the body NEED to be consumed to be written to the WARC file.
+	io.Copy(io.Discard, resp.Body)
 
-    // Will block until records are actually written to the WARC file
-    <-feedbackChan
+	// Will block until records are actually written to the WARC file
+	<-feedbackChan
 }
 ```
 
