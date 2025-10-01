@@ -195,7 +195,8 @@ func checkRotatorSettings(settings *RotatorSettings) (err error) {
 	}
 
 	// Check if the specified compression algorithm is valid
-	if settings.Compression != "" && strings.ToLower(settings.Compression) != "gzip" && strings.ToLower(settings.Compression) != "zstd" {
+	normalizedCompression := strings.ToLower(settings.Compression)
+	if settings.Compression != "" && normalizedCompression != "gzip" && normalizedCompression != "zstd" {
 		return errors.New("invalid compression algorithm: " + settings.Compression)
 	}
 
