@@ -42,8 +42,8 @@ func isHTTPRequest(line string) bool {
 // NewWriter creates a new WARC writer.
 func NewWriter(writer io.Writer, fileName string, digestAlgorithm DigestAlgorithm, compression string, contentLengthHeader string, newFileCreation bool, dictionary []byte) (*Writer, error) {
 	if compression != "" {
-		switch compression {
-		case "GZIP":
+		switch strings.ToLower(compression) {
+		case "gzip":
 			gzipWriter := newGzipWriter(writer)
 
 			return &Writer{
@@ -53,7 +53,7 @@ func NewWriter(writer io.Writer, fileName string, digestAlgorithm DigestAlgorith
 				GZIPWriter:      gzipWriter,
 				FileWriter:      bufio.NewWriter(gzipWriter),
 			}, nil
-		case "ZSTD":
+		case "zstd":
 			if newFileCreation && len(dictionary) > 0 {
 				dictionaryZstdwriter, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedBetterCompression))
 				if err != nil {
@@ -195,7 +195,8 @@ func checkRotatorSettings(settings *RotatorSettings) (err error) {
 	}
 
 	// Check if the specified compression algorithm is valid
-	if settings.Compression != "" && settings.Compression != "GZIP" && settings.Compression != "ZSTD" {
+	normalizedCompression := strings.ToLower(settings.Compression)
+	if settings.Compression != "" && normalizedCompression != "gzip" && normalizedCompression != "zstd" {
 		return errors.New("invalid compression algorithm: " + settings.Compression)
 	}
 
