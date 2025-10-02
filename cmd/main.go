@@ -1,25 +1,56 @@
 package main
 
 import (
+	"log/slog"
 	"os"
-	"runtime"
 
+	"github.com/internetarchive/gowarc/cmd/extract"
+	"github.com/internetarchive/gowarc/cmd/mend"
+	"github.com/internetarchive/gowarc/cmd/verify"
 	"github.com/spf13/cobra"
 )
 
 func init() {
-	rootCmd.AddCommand(extractCmd)
-	rootCmd.AddCommand(verifyCmd)
+	// Add global flags
+	rootCmd.PersistentFlags().Bool("json", false, "Output logs in JSON format")
+	rootCmd.PersistentFlags().BoolP("verbose", "v", false, "Enable verbose/debug logging")
 
-	extractCmd.Flags().IntP("threads", "t", 1, "Number of threads to use for extraction")
-	extractCmd.Flags().StringP("output", "o", "output", "Output directory for extracted files")
-	extractCmd.Flags().StringSliceP("content-type", "c", []string{}, "Content type that should be extracted")
-	extractCmd.Flags().Bool("allow-overwrite", false, "Allow overwriting of existing files")
-	extractCmd.Flags().Bool("host-sort", false, "Sort the extracted URLs by host")
-	extractCmd.Flags().Bool("hash-suffix", false, "When duplicate file names exist, the hash will be added if a duplicate file name exists. ")
+	// Setup logger before adding subcommands
+	rootCmd.PersistentPreRun = func(cmd *cobra.Command, args []string) {
+		setupLogger(cmd)
+	}
 
-	verifyCmd.Flags().IntP("threads", "t", runtime.NumCPU(), "Number of threads to use for verification")
-	verifyCmd.Flags().Bool("json", false, "Output results in JSON format")
+	rootCmd.AddCommand(extract.Command)
+	rootCmd.AddCommand(mend.Command)
+	rootCmd.AddCommand(verify.Command)
+}
+
+// setupLogger configures the global logger based on flags
+func setupLogger(cmd *cobra.Command) {
+	jsonOutput, _ := cmd.Flags().GetBool("json")
+	verbose, _ := cmd.Flags().GetBool("verbose")
+
+	var handler slog.Handler
+	if jsonOutput {
+		handler = slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+			Level: getLogLevel(verbose),
+		})
+	} else {
+		handler = slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+			Level: getLogLevel(verbose),
+		})
+	}
+
+	logger := slog.New(handler)
+	slog.SetDefault(logger)
+}
+
+// getLogLevel returns the appropriate log level based on verbose flag
+func getLogLevel(verbose bool) slog.Level {
+	if verbose {
+		return slog.LevelDebug
+	}
+	return slog.LevelInfo
 }
 
 // rootCmd represents the base command when called without any subcommands
@@ -27,22 +58,6 @@ var rootCmd = &cobra.Command{
 	Use:   "cmd",
 	Short: "Utility to process WARC files",
 	Long:  `Utility to process WARC files`,
-}
-
-var extractCmd = &cobra.Command{
-	Use:   "extract",
-	Short: "Extracts the URLs from one or many WARC file(s)",
-	Long:  `Extracts the URLs from one or many WARC file(s)`,
-	Args:  cobra.MinimumNArgs(1),
-	Run:   extract,
-}
-
-var verifyCmd = &cobra.Command{
-	Use:   "verify",
-	Short: "Verify the validity of one or many WARC file(s)",
-	Long:  `Verify the validity of xtracts the URLs from one or many WARC file(s)`,
-	Args:  cobra.MinimumNArgs(1),
-	Run:   verify,
 }
 
 func main() {
