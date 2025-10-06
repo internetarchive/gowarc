@@ -21,25 +21,25 @@ The `mend` command helps fix corrupted or incomplete gzip-compressed WARC files 
 
 ```bash
 # Basic usage - will prompt for confirmation
-gowarc mend file1.warc.gz.open file2.warc.gz.open
+warc mend file1.warc.gz.open file2.warc.gz.open
 
 # Dry run - shows what would be done without making changes
-gowarc mend --dry-run corrupted.warc.gz.open
+warc mend --dry-run corrupted.warc.gz.open
 
 # Auto-yes - automatically confirm all repairs
-gowarc mend --yes file.warc.gz.open
+warc mend --yes file.warc.gz.open
 
 # Verbose mode - shows detailed progress
-gowarc mend -v large-file.warc.gz.open
+warc mend -v large-file.warc.gz.open
 
 # Process multiple files with summary
-gowarc mend --dry-run *.warc.gz.open
+warc mend --dry-run *.warc.gz.open
 
 # Force verification of any gzip WARC files (not just .open)
-gowarc mend --force --dry-run archive.warc.gz
+warc mend --force --dry-run archive.warc.gz
 
 # Force verification with auto-confirm
-gowarc mend --force --yes corrupted.warc.gz
+warc mend --force --yes corrupted.warc.gz
 ```
 
 ### Force Mode
@@ -55,7 +55,7 @@ The `--force` flag allows verification and repair of any gzip WARC files, not ju
 
 ```bash
 # File with extra trailing bytes
-$ gowarc mend corrupted.warc.gz.open
+$ warc mend corrupted.warc.gz.open
 time=2025-09-26T10:30:15.123+02:00 level=WARN msg="corruption detected" file=corrupted.warc.gz.open error="gzip reset: gzip: invalid header" lastValidPos="1.0 MB" extraBytes="24 B"
 time=2025-09-26T10:30:15.123+02:00 level=WARN msg="file has .open suffix" file=corrupted.warc.gz.open
 y
@@ -65,14 +65,14 @@ time=2025-09-26T10:30:18.789+02:00 level=INFO msg="removed .open suffix" from=co
 time=2025-09-26T10:30:18.789+02:00 level=INFO msg="mend operation completed: 1 processed, 1 truncated (saved 24 B), 1 renamed, 1 with errors, 1523 total records in 3.666s" dryRun=false files=1 records=1523 bytesSaved=24
 
 # Good file that just needs closing
-$ gowarc mend crawl-20250926.warc.gz.open
+$ warc mend crawl-20250926.warc.gz.open
 time=2025-09-26T10:31:22.001+02:00 level=WARN msg="file has .open suffix" file=crawl-20250926.warc.gz.open
 y
 time=2025-09-26T10:31:25.234+02:00 level=INFO msg="removed .open suffix" from=crawl-20250926.warc.gz.open to=crawl-20250926.warc.gz
 time=2025-09-26T10:31:25.234+02:00 level=INFO msg="mend operation completed: 1 processed, 1 renamed, 3256 total records in 3.233s" dryRun=false files=1 records=3256 bytesSaved=0
 
 # Dry run mode with multiple files
-$ gowarc mend --dry-run *.warc.gz.open
+$ warc mend --dry-run *.warc.gz.open
 time=2025-09-26T10:32:10.111+02:00 level=WARN msg="corruption detected" file=damaged.warc.gz.open error="copying content: unexpected EOF" lastValidPos="512.0 KB" extraBytes="100 B"
 time=2025-09-26T10:32:10.111+02:00 level=WARN msg="file has .open suffix" file=damaged.warc.gz.open
 time=2025-09-26T10:32:10.111+02:00 level=INFO msg="would truncate file" file=damaged.warc.gz.open at=524288 dryRun=true
@@ -81,7 +81,7 @@ time=2025-09-26T10:32:10.555+02:00 level=INFO msg="would rename file" from=good.
 time=2025-09-26T10:32:10.555+02:00 level=INFO msg="mend operation completed: 2 processed, 1 would truncate (saved 100 B), 2 would rename, 1 with errors, 2048 total records in 444ms" dryRun=true files=2 records=2048 bytesSaved=100
 
 # Regular .gz files are skipped
-$ gowarc mend -v completed.warc.gz
+$ warc mend -v completed.warc.gz
 time=2025-09-26T10:33:15.789+02:00 level=DEBUG msg="skipping non-.open file" file=completed.warc.gz
 time=2025-09-26T10:33:15.789+02:00 level=INFO msg="mend operation completed: no files needed mending in 1ms" dryRun=false files=1 records=0 bytesSaved=0
 ```

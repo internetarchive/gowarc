@@ -123,47 +123,47 @@ Pre-built releases are available on the [GitHub releases page](https://github.co
 
 ```bash
 # Install from source
-go install github.com/internetarchive/gowarc/cmd@latest
+go install github.com/internetarchive/gowarc/cmd/warc@latest
 
 # Or build locally
-cd cmd/
-go build -o gowarc
+cd cmd/warc/
+go build -o warc
 ```
 
 ### Available Commands
 
-#### `gowarc extract`
+#### `warc extract`
 Extract files and content from WARC archives with filtering options.
 
 ```bash
 # Extract all files from WARC archives
-gowarc extract file1.warc.gz file2.warc.gz
+warc extract file1.warc.gz file2.warc.gz
 
 # Extract only specific content types
-gowarc extract --content-type "text/html" --content-type "image/jpeg" archive.warc.gz
+warc extract --content-type "text/html" --content-type "image/jpeg" archive.warc.gz
 
 # Extract to specific directory with multiple threads  
-gowarc extract --output ./extracted --threads 4 *.warc.gz
+warc extract --output ./extracted --threads 4 *.warc.gz
 
 # Sort extracted files by host
-gowarc extract --host-sort archive.warc.gz
+warc extract --host-sort archive.warc.gz
 ```
 
-#### `gowarc mend` 
+#### `warc mend` 
 Repair and close incomplete gzip-compressed WARC files that were left with `.open` suffix during crawling.
 
 ```bash
 # Dry run to see what would be fixed
-gowarc mend --dry-run *.warc.gz.open
+warc mend --dry-run *.warc.gz.open
 
 # Fix files with confirmation prompts  
-gowarc mend corrupted.warc.gz.open
+warc mend corrupted.warc.gz.open
 
 # Auto-fix without prompts
-gowarc mend --yes *.warc.gz.open
+warc mend --yes *.warc.gz.open
 
 # Force verification of any gzip WARC files (not just .open)
-gowarc mend --force --dry-run archive.warc.gz
+warc mend --force --dry-run archive.warc.gz
 ```
 
 **Features:**
@@ -175,37 +175,37 @@ gowarc mend --force --dry-run archive.warc.gz
 - Provides comprehensive statistics on repairs performed
 - Memory-efficient streaming for large files
 
-See [cmd/mend/README.md](cmd/mend/README.md) for detailed documentation.
+See [cmd/warc/mend/README.md](cmd/warc/mend/README.md) for detailed documentation.
 
-#### `gowarc verify`
+#### `warc verify`
 Validate the integrity and structure of WARC files.
 
 ```bash
 # Verify single file
-gowarc verify archive.warc.gz
+warc verify archive.warc.gz
 
 # Verify multiple files with progress
-gowarc verify -v *.warc.gz
+warc verify -v *.warc.gz
 
 # JSON output for automation
-gowarc verify --json archive.warc.gz
+warc verify --json archive.warc.gz
 ```
 
-#### `gowarc completion`
+#### `warc completion`
 Generate shell completion scripts for bash, zsh, fish, or PowerShell.
 
 ```bash
 # Bash completion
-gowarc completion bash > /etc/bash_completion.d/gowarc
+warc completion bash > /etc/bash_completion.d/warc
 
-# Zsh completion  
-gowarc completion zsh > ~/.zsh/completions/_gowarc
+# Zsh completion
+warc completion zsh > ~/.zsh/completions/_warc
 
 # Fish completion
-gowarc completion fish > ~/.config/fish/completions/gowarc.fish
+warc completion fish > ~/.config/fish/completions/warc.fish
 
 # PowerShell completion
-gowarc completion powershell > gowarc.ps1
+warc completion powershell > warc.ps1
 ```
 
 ### Global Flags
