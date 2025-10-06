@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/internetarchive/gowarc/cmd/verify"
+	"github.com/internetarchive/gowarc/cmd/warc/verify"
 	"github.com/spf13/cobra"
 )
 
