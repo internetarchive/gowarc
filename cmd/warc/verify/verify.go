@@ -11,7 +11,7 @@ import (
 	"time"
 
 	warc "github.com/internetarchive/gowarc"
-	"github.com/internetarchive/gowarc/cmd/utils"
+	"github.com/internetarchive/gowarc/cmd/warc/utils"
 	"github.com/spf13/cobra"
 )
 
