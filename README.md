@@ -116,6 +116,109 @@ func main() {
 }
 ```
 
+## CLI Tools
+
+In addition to the Go library, gowarc provides several command-line utilities for working with WARC files:
+
+### Installation
+
+Pre-built releases are available on the [GitHub releases page](https://github.com/internetarchive/gowarc/releases).
+
+```bash
+# Install from source
+go install github.com/internetarchive/gowarc/cmd/warc@latest
+
+# Or build locally
+cd cmd/warc/
+go build -o warc
+```
+
+### Available Commands
+
+#### `warc extract`
+Extract files and content from WARC archives with filtering options.
+
+```bash
+# Extract all files from WARC archives
+warc extract file1.warc.gz file2.warc.gz
+
+# Extract only specific content types
+warc extract --content-type "text/html" --content-type "image/jpeg" archive.warc.gz
+
+# Extract to specific directory with multiple threads  
+warc extract --output ./extracted --threads 4 *.warc.gz
+
+# Sort extracted files by host
+warc extract --host-sort archive.warc.gz
+```
+
+#### `warc mend` 
+Repair and close incomplete gzip-compressed WARC files that were left with `.open` suffix during crawling.
+
+```bash
+# Dry run to see what would be fixed
+warc mend --dry-run *.warc.gz.open
+
+# Fix files with confirmation prompts  
+warc mend corrupted.warc.gz.open
+
+# Auto-fix without prompts
+warc mend --yes *.warc.gz.open
+
+# Force verification of any gzip WARC files (not just .open)
+warc mend --force --dry-run archive.warc.gz
+```
+
+**Features:**
+- By default, only processes `.open` files; use `--force` to verify any gzip WARC files
+- Verifies gzip format using magic bytes, not just file extension
+- Detects and removes trailing garbage bytes
+- Truncates at corruption points while preserving maximum valid data  
+- Removes `.open` suffix to "close" files when present
+- Provides comprehensive statistics on repairs performed
+- Memory-efficient streaming for large files
+
+See [cmd/warc/mend/README.md](cmd/warc/mend/README.md) for detailed documentation.
+
+#### `warc verify`
+Validate the integrity and structure of WARC files.
+
+```bash
+# Verify single file
+warc verify archive.warc.gz
+
+# Verify multiple files with progress
+warc verify -v *.warc.gz
+
+# JSON output for automation
+warc verify --json archive.warc.gz
+```
+
+#### `warc completion`
+Generate shell completion scripts for bash, zsh, fish, or PowerShell.
+
+```bash
+# Bash completion
+warc completion bash > /etc/bash_completion.d/warc
+
+# Zsh completion
+warc completion zsh > ~/.zsh/completions/_warc
+
+# Fish completion
+warc completion fish > ~/.config/fish/completions/warc.fish
+
+# PowerShell completion
+warc completion powershell > warc.ps1
+```
+
+### Global Flags
+
+All commands support these global options:
+
+- `-v, --verbose` - Enable verbose/debug logging
+- `--json` - Output logs in JSON format for structured processing
+- `-h, --help` - Show help for any command
+
 ## Build tags
 
 - `standard_gzip`: Use the standard library gzip implementation instead of the faster one from [klauspost](https://github.com/klauspost/compress)

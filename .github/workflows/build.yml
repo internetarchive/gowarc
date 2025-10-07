@@ -21,6 +21,6 @@ jobs:
         compress_assets: OFF
         md5sum: FALSE
         sha256sum: TRUE
-        project_path: './cmd'
+        project_path: './cmd/warc'
         binary_name: 'warc'
         asset_name: 'warc-linux-amd64'

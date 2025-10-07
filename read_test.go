@@ -392,7 +392,7 @@ func testFileGZipMemberCorrectness(t *testing.T, path string) {
 
 func TestReader(t *testing.T) {
 	var paths = []string{
-		"testdata/test.warc.gz",
+		"testdata/warcs/test.warc.gz",
 	}
 	for _, path := range paths {
 		testFileHash(t, path)
@@ -404,7 +404,7 @@ func TestReader(t *testing.T) {
 
 func TestReaderNoContentOpt(t *testing.T) {
 	var paths = []string{
-		"testdata/test.warc.gz",
+		"testdata/warcs/test.warc.gz",
 	}
 	for _, path := range paths {
 		file, err := os.Open(path)
@@ -437,7 +437,7 @@ func TestReaderNoContentOpt(t *testing.T) {
 
 func TestReaderSize(t *testing.T) {
 	paths := []string{
-		"testdata/test.warc.gz",
+		"testdata/warcs/test.warc.gz",
 	}
 
 	for _, path := range paths {
@@ -482,7 +482,7 @@ func TestReaderSize(t *testing.T) {
 
 func BenchmarkBasicRead(b *testing.B) {
 	// default test warc location
-	path := "testdata/test.warc.gz"
+	path := "testdata/warcs/test.warc.gz"
 
 	for n := 0; n < b.N; n++ {
 		b.Logf("checking 'WARC-Block-Digest' on %q", path)
