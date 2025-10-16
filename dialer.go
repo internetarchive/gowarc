@@ -28,9 +28,38 @@ import (
 type contextKey string
 
 const (
-	ContextKeyFeedback    contextKey = "feedback"
+	// ContextKeyFeedback is the context key for the feedback channel.
+	// When provided, the channel will receive a signal once the WARC record
+	// has been written to disk, making WARC writing synchronous.
+	// Use WithFeedbackChannel() helper function for convenience.
+	ContextKeyFeedback contextKey = "feedback"
+
+	// ContextKeyWrappedConn is the context key for the wrapped connection channel.
+	// This is used internally to retrieve the wrapped connection for advanced use cases.
+	// Use WithWrappedConnection() helper function for convenience.
 	ContextKeyWrappedConn contextKey = "wrappedConn"
 )
+
+// WithFeedbackChannel adds a feedback channel to the request context.
+// When provided, the channel will receive a signal once the WARC record
+// has been written to disk, making WARC writing synchronous.
+// Without this, WARC writing is asynchronous.
+//
+// Example:
+//
+//	feedbackChan := make(chan struct{}, 1)
+//	req = req.WithContext(warc.WithFeedbackChannel(req.Context(), feedbackChan))
+//	// ... perform request ...
+//	<-feedbackChan // blocks until WARC is written
+func WithFeedbackChannel(ctx context.Context, feedbackChan chan struct{}) context.Context {
+	return context.WithValue(ctx, ContextKeyFeedback, feedbackChan)
+}
+
+// WithWrappedConnection adds a wrapped connection channel to the request context.
+// This is used for advanced use cases where direct access to the connection is needed.
+func WithWrappedConnection(ctx context.Context, wrappedConnChan chan *CustomConnection) context.Context {
+	return context.WithValue(ctx, ContextKeyWrappedConn, wrappedConnChan)
+}
 
 type customDialer struct {
 	proxyDialer proxy.ContextDialer
