@@ -315,7 +315,7 @@ var mendExpectedResults = map[string]expectedResult{
 		recordCount:   1, // Actual count from mend operation
 		truncateAt:    0, // No truncation needed
 		description:   "good synthetic file with .open suffix",
-		shouldBeValid: false, // File has WARC header corruption that mend can't fix
+		shouldBeValid: true, // After removing the .open suffix the WARC remains valid
 	},
 	"empty.warc.gz.open": {
 		outputFile:    "empty.warc.gz",
@@ -331,7 +331,7 @@ var mendExpectedResults = map[string]expectedResult{
 		recordCount:   1,    // Actual count from mend operation
 		truncateAt:    2362, // Truncates trailing garbage
 		description:   "synthetic file with trailing garbage bytes",
-		shouldBeValid: false, // File has WARC header corruption that mend can't fix
+		shouldBeValid: true, // Truncating the trailing garbage yields a valid WARC record
 	},
 	"corrupted-mid-record.warc.gz.open": {
 		outputFile:    "corrupted-mid-record.warc.gz",
@@ -339,7 +339,7 @@ var mendExpectedResults = map[string]expectedResult{
 		recordCount:   1, // Actual count from mend operation
 		truncateAt:    1219,
 		description:   "synthetic file corrupted mid-record",
-		shouldBeValid: false, // File has WARC header corruption that mend can't fix
+		shouldBeValid: true, // Truncating back to the last valid position restores a valid record
 	},
 }
 
