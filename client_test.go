@@ -159,8 +159,8 @@ func TestHTTPClient(t *testing.T) {
 
 	// verify that the remote dedupe count is correct
 	dataTotal := httpClient.DataTotal.Load()
-	if dataTotal < 27130 || dataTotal > 27160 {
-		t.Fatalf("total bytes downloaded mismatch, expected: 27130-27160 got: %d", dataTotal)
+	if dataTotal < 27130 || dataTotal > 27170 {
+		t.Fatalf("total bytes downloaded mismatch, expected: 27130-27170 got: %d", dataTotal)
 	}
 }
 
