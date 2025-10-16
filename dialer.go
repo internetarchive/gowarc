@@ -24,6 +24,14 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// contextKey is a custom type for context keys to avoid collisions
+type contextKey string
+
+const (
+	ContextKeyFeedback    contextKey = "feedback"
+	ContextKeyWrappedConn contextKey = "wrappedConn"
+)
+
 type customDialer struct {
 	proxyDialer proxy.ContextDialer
 	client      *CustomHTTPClient
@@ -164,8 +172,8 @@ func (d *customDialer) wrapConnection(ctx context.Context, c net.Conn, scheme st
 		Writer:           io.MultiWriter(reqWriter, c),
 		connReadDeadline: d.client.ConnReadDeadline,
 	}
-	if ctx.Value("wrappedConn") != nil {
-		connChan, ok := ctx.Value("wrappedConn").(chan *CustomConnection)
+	if ctx.Value(ContextKeyWrappedConn) != nil {
+		connChan, ok := ctx.Value(ContextKeyWrappedConn).(chan *CustomConnection)
 		if !ok {
 			panic("wrapConnection: wrappedConn channel is not of type chan *CustomConnection")
 		}
@@ -311,8 +319,8 @@ func (d *customDialer) writeWARCFromConnection(ctx context.Context, reqPipe, res
 	// Defer the closing of the channel in case of an early return without mixing signals when the batch was properly sent
 	var feedbackChan chan struct{}
 	batchSent := false
-	if ctx.Value("feedback") != nil {
-		feedbackChan = ctx.Value("feedback").(chan struct{})
+	if ctx.Value(ContextKeyFeedback) != nil {
+		feedbackChan = ctx.Value(ContextKeyFeedback).(chan struct{})
 		defer func() {
 			if !batchSent {
 				close(feedbackChan)

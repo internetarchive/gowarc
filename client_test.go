@@ -374,7 +374,7 @@ func TestHTTPClientWithFeedbackChan(t *testing.T) {
 	}
 
 	feedbackCh := make(chan struct{}, 1)
-	req = req.WithContext(context.WithValue(req.Context(), "feedback", feedbackCh))
+	req = req.WithContext(context.WithValue(req.Context(), ContextKeyFeedback, feedbackCh))
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
