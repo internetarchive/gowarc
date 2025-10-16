@@ -41,3 +41,13 @@ func getCachedMemoryUsage() (float64, error) {
 
 	return fraction, nil
 }
+
+// ResetMemoryCache clears the cached memory usage state. This is primarily used in tests
+// to prevent state pollution between test packages.
+func ResetMemoryCache() {
+	memoryUsageCache.Lock()
+	defer memoryUsageCache.Unlock()
+
+	memoryUsageCache.lastChecked = time.Time{}
+	memoryUsageCache.lastFraction = 0
+}

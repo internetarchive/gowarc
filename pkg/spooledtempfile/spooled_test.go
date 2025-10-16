@@ -31,6 +31,8 @@ func mockMemoryUsage(t *testing.T, fraction float64) {
 	t.Cleanup(func() {
 		getSystemMemoryUsedFraction = originalFn
 		memoryUsageCache = originalCache
+		// Ensure global cache is clean to prevent state pollution to other test packages
+		ResetMemoryCache()
 	})
 }
 
