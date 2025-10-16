@@ -369,14 +369,7 @@ func createMockCobraCommand() *cobra.Command {
 // TestMendFunctionDirect verifies that the mend function produces
 // expected results on synthetic test data by comparing against pre-computed checksums
 func TestMendFunctionDirect(t *testing.T) {
-	// Get current directory and construct paths relative to workspace root
-	cwd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("failed to get current directory: %v", err)
-	}
-	// From cmd/mend, go up to workspace root
-	workspaceRoot := filepath.Join(cwd, "../..")
-	testdataDir := filepath.Join(workspaceRoot, "testdata/warcs")
+	testdataDir := getTestdataDir()
 	outputDir := filepath.Join(testdataDir, "mend_test_output")
 
 	// Ensure output directory exists
