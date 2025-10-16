@@ -47,19 +47,19 @@ func TestSysctlMemoryValues(t *testing.T) {
 	t.Logf("Page size: %d bytes", pageSize)
 
 	// Test page counts
-	freePages, err := getSysctlUint32("vm.page_free_count")
+	freePages, err := unix.SysctlUint32("vm.page_free_count")
 	if err != nil {
 		t.Fatalf("failed to get vm.page_free_count: %v", err)
 	}
 	t.Logf("Free pages: %d (%.2f MB)", freePages, float64(freePages*pageSize)/(1024*1024))
 
-	pageableInternal, err := getSysctlUint32("vm.page_pageable_internal_count")
+	pageableInternal, err := unix.SysctlUint32("vm.page_pageable_internal_count")
 	if err != nil {
 		t.Fatalf("failed to get vm.page_pageable_internal_count: %v", err)
 	}
 	t.Logf("Pageable internal pages: %d (%.2f MB)", pageableInternal, float64(pageableInternal*pageSize)/(1024*1024))
 
-	pageableExternal, err := getSysctlUint32("vm.page_pageable_external_count")
+	pageableExternal, err := unix.SysctlUint32("vm.page_pageable_external_count")
 	if err != nil {
 		t.Fatalf("failed to get vm.page_pageable_external_count: %v", err)
 	}
@@ -88,24 +88,4 @@ func TestMemoryFractionConsistency(t *testing.T) {
 				fractions[i-1], fractions[i], diff)
 		}
 	}
-}
-
-// TestGetSysctlUint32 tests the helper function
-func TestGetSysctlUint32(t *testing.T) {
-	// Test with a known sysctl value
-	pageSize, err := getSysctlUint32("vm.pagesize")
-	if err != nil {
-		t.Fatalf("getSysctlUint32(\"vm.pagesize\") failed: %v", err)
-	}
-
-	if pageSize == 0 {
-		t.Fatal("vm.pagesize returned 0")
-	}
-
-	// pageSize should be a power of 2 and reasonable (4096 or 16384 typically)
-	if pageSize != 4096 && pageSize != 16384 {
-		t.Logf("Warning: unusual page size: %d", pageSize)
-	}
-
-	t.Logf("Page size: %d bytes", pageSize)
 }

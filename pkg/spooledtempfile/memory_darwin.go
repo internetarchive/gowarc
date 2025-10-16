@@ -3,7 +3,6 @@
 package spooledtempfile
 
 import (
-	"encoding/binary"
 	"fmt"
 
 	"golang.org/x/sys/unix"
@@ -37,27 +36,27 @@ var getSystemMemoryUsedFraction = func() (float64, error) {
 	// - vm.page_purgeable_count: purgeable pages (can be reclaimed)
 	// - vm.page_speculative_count: speculative pages
 
-	freePages, err := getSysctlUint32("vm.page_free_count")
+	freePages, err := unix.SysctlUint32("vm.page_free_count")
 	if err != nil {
 		return 0, fmt.Errorf("failed to get vm.page_free_count: %w", err)
 	}
 
-	pageableInternal, err := getSysctlUint32("vm.page_pageable_internal_count")
+	pageableInternal, err := unix.SysctlUint32("vm.page_pageable_internal_count")
 	if err != nil {
 		return 0, fmt.Errorf("failed to get vm.page_pageable_internal_count: %w", err)
 	}
 
-	pageableExternal, err := getSysctlUint32("vm.page_pageable_external_count")
+	pageableExternal, err := unix.SysctlUint32("vm.page_pageable_external_count")
 	if err != nil {
 		return 0, fmt.Errorf("failed to get vm.page_pageable_external_count: %w", err)
 	}
 
-	purgeablePages, err := getSysctlUint32("vm.page_purgeable_count")
+	purgeablePages, err := unix.SysctlUint32("vm.page_purgeable_count")
 	if err != nil {
 		return 0, fmt.Errorf("failed to get vm.page_purgeable_count: %w", err)
 	}
 
-	speculativePages, err := getSysctlUint32("vm.page_speculative_count")
+	speculativePages, err := unix.SysctlUint32("vm.page_speculative_count")
 	if err != nil {
 		return 0, fmt.Errorf("failed to get vm.page_speculative_count: %w", err)
 	}
@@ -68,7 +67,14 @@ var getSystemMemoryUsedFraction = func() (float64, error) {
 	// We'll use the first approach as it's more straightforward
 	totalPages := totalBytes / uint64(pageSize)
 	reclaimablePages := uint64(freePages) + uint64(purgeablePages) + uint64(speculativePages)
-	usedPages := totalPages - reclaimablePages
+
+	// Clamp to prevent underflow: if reclaimable > total, use total
+	var usedPages uint64
+	if reclaimablePages < totalPages {
+		usedPages = totalPages - reclaimablePages
+	} else {
+		usedPages = 0
+	}
 
 	usedBytes := usedPages * uint64(pageSize)
 
@@ -82,17 +88,4 @@ var getSystemMemoryUsedFraction = func() (float64, error) {
 	}
 
 	return fraction, nil
-}
-
-// getSysctlUint32 gets a uint32 value from sysctl
-func getSysctlUint32(name string) (uint32, error) {
-	raw, err := unix.SysctlRaw(name)
-	if err != nil {
-		return 0, err
-	}
-	if len(raw) < 4 {
-		return 0, fmt.Errorf("sysctl %s returned insufficient data", name)
-	}
-	// Parse as native-endian uint32 (ARM64 macOS is little-endian)
-	return binary.LittleEndian.Uint32(raw), nil
 }

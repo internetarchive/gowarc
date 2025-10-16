@@ -120,7 +120,7 @@ func cgroupV1UsedFraction() (frac float64, ok bool, err error) {
 func hostMeminfoUsedFraction() (float64, error) {
 	f, err := os.Open(procMeminfoPath)
 	if err != nil {
-		return 0, fmt.Errorf("failed to open /proc/meminfo: %v", err)
+		return 0, fmt.Errorf("failed to open %s: %v", procMeminfoPath, err)
 	}
 	defer f.Close()
 
