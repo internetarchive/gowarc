@@ -11,12 +11,37 @@ import (
 	"testing"
 )
 
+// mockMemoryUsage mocks system memory to the specified fraction for the duration of the test.
+// It uses t.Cleanup to automatically restore the original function and cache state.
+// fraction should be between 0.0 (0% used) and 1.0 (100% used).
+func mockMemoryUsage(t *testing.T, fraction float64) {
+	t.Helper()
+
+	// Save originals
+	originalFn := getSystemMemoryUsedFraction
+	originalCache := memoryUsageCache
+
+	// Reset cache and mock function
+	memoryUsageCache = &globalMemoryCache{}
+	getSystemMemoryUsedFraction = func() (float64, error) {
+		return fraction, nil
+	}
+
+	// Auto-restore on test completion
+	t.Cleanup(func() {
+		getSystemMemoryUsedFraction = originalFn
+		memoryUsageCache = originalCache
+	})
+}
+
 func generateTestDataInKB(size int) []byte {
 	return bytes.Repeat([]byte("A"), size*1024)
 }
 
 // TestInMemoryBasic writes data below threshold and verifies it remains in memory.
 func TestInMemoryBasic(t *testing.T) {
+	mockMemoryUsage(t, 0.30) // Mock low memory usage (30%)
+
 	spool := NewSpooledTempFile("test", os.TempDir(), 100, false, -1)
 	defer spool.Close()
 
@@ -66,6 +91,8 @@ func TestInMemoryBasic(t *testing.T) {
 
 // TestThresholdCrossing writes enough data to switch from in-memory to disk.
 func TestThresholdCrossing(t *testing.T) {
+	mockMemoryUsage(t, 0.30) // Mock low memory usage (30%)
+
 	spool := NewSpooledTempFile("test", os.TempDir(), 64*1024, false, -1)
 	defer spool.Close()
 
@@ -114,6 +141,7 @@ func TestThresholdCrossing(t *testing.T) {
 }
 
 // TestForceOnDisk checks the fullOnDisk parameter.
+// Note: This test doesn't mock memory because fullOnDisk=true forces disk behavior regardless.
 func TestForceOnDisk(t *testing.T) {
 	spool := NewSpooledTempFile("test", os.TempDir(), 64*1024, true, -1)
 	defer spool.Close()
@@ -142,6 +170,8 @@ func TestForceOnDisk(t *testing.T) {
 
 // TestReadAtAndSeekInMemory tests seeking and ReadAt on an in-memory spool.
 func TestReadAtAndSeekInMemory(t *testing.T) {
+	mockMemoryUsage(t, 0.30) // Mock low memory usage (30%)
+
 	spool := NewSpooledTempFile("test", os.TempDir(), 64*1024, false, -1)
 	defer spool.Close()
 
@@ -185,6 +215,7 @@ func TestReadAtAndSeekInMemory(t *testing.T) {
 }
 
 // TestReadAtAndSeekOnDisk tests seeking and ReadAt on a spool that has switched to disk.
+// Note: This test doesn't mock memory because it writes 65KB to intentionally cross the 64KB threshold.
 func TestReadAtAndSeekOnDisk(t *testing.T) {
 	spool := NewSpooledTempFile("test", os.TempDir(), 64*1024, false, -1)
 	defer spool.Close()
@@ -255,6 +286,8 @@ func TestWriteAfterReadPanic(t *testing.T) {
 
 // TestCloseInMemory checks closing while still in-memory.
 func TestCloseInMemory(t *testing.T) {
+	mockMemoryUsage(t, 0.30) // Mock low memory usage (30%)
+
 	spool := NewSpooledTempFile("test", os.TempDir(), 64*1024, false, -1)
 
 	_, err := spool.Write([]byte("Small data"))
@@ -284,6 +317,7 @@ func TestCloseInMemory(t *testing.T) {
 }
 
 // TestCloseOnDisk checks closing after spool has switched to disk.
+// Note: This test doesn't mock memory because it writes 65KB to intentionally cross the threshold.
 func TestCloseOnDisk(t *testing.T) {
 	spool := NewSpooledTempFile("test", os.TempDir(), 64*1024, false, -1)
 
@@ -327,6 +361,8 @@ func TestCloseOnDisk(t *testing.T) {
 
 // TestLen verifies Len() for both in-memory and on-disk states.
 func TestLen(t *testing.T) {
+	mockMemoryUsage(t, 0.30) // Mock low memory usage (30%)
+
 	spool := NewSpooledTempFile("test", os.TempDir(), 64*1024, false, -1)
 	defer spool.Close()
 
@@ -351,6 +387,8 @@ func TestLen(t *testing.T) {
 
 // TestFileName checks correctness of FileName in both modes.
 func TestFileName(t *testing.T) {
+	mockMemoryUsage(t, 0.30) // Mock low memory usage (30%)
+
 	spool := NewSpooledTempFile("testprefix", os.TempDir(), 64*1024, false, -1)
 	defer spool.Close()
 
@@ -383,17 +421,7 @@ func TestFileName(t *testing.T) {
 // TestSkipInMemoryAboveRAMUsage verifies that if `isSystemMemoryUsageHigh()`
 // returns true, the spool goes directly to disk even for small writes.
 func TestSkipInMemoryAboveRAMUsage(t *testing.T) {
-	memoryUsageCache = &globalMemoryCache{}
-	// Save the old function so we can restore it later
-	oldGetSystemMemoryUsedFraction := getSystemMemoryUsedFraction
-	// Force system memory usage to appear above 50%
-	getSystemMemoryUsedFraction = func() (float64, error) {
-		return 0.60, nil // 60% used => above the 50% threshold
-	}
-	// Restore after test
-	defer func() {
-		getSystemMemoryUsedFraction = oldGetSystemMemoryUsedFraction
-	}()
+	mockMemoryUsage(t, 0.60) // Mock memory usage at 60% (above 50% threshold)
 
 	// Even though threshold is large (e.g. 1MB), because our mock usage is 60%,
 	// spool should skip memory and go straight to disk.
@@ -427,9 +455,67 @@ func TestSkipInMemoryAboveRAMUsage(t *testing.T) {
 	}
 }
 
+// TestMemoryThresholdBelowLimit verifies behavior when memory is just below threshold (49%).
+func TestMemoryThresholdBelowLimit(t *testing.T) {
+	mockMemoryUsage(t, 0.49) // Mock memory at 49% (below 50% threshold)
+
+	spool := NewSpooledTempFile("test", os.TempDir(), 1024*1024, false, 0.50)
+	defer spool.Close()
+
+	data := []byte("Should stay in memory")
+	_, err := spool.Write(data)
+	if err != nil {
+		t.Fatalf("Write error: %v", err)
+	}
+
+	// Should stay in memory since 49% < 50%
+	if spool.FileName() != "" {
+		t.Errorf("Expected spool to stay in memory (49%% < 50%%), but got file: %s", spool.FileName())
+	}
+}
+
+// TestMemoryThresholdAtLimit verifies behavior when memory is exactly at threshold (50%).
+func TestMemoryThresholdAtLimit(t *testing.T) {
+	mockMemoryUsage(t, 0.50) // Mock memory at exactly 50% (at threshold)
+
+	spool := NewSpooledTempFile("test", os.TempDir(), 1024*1024, false, 0.50)
+	defer spool.Close()
+
+	data := []byte("Should go to disk")
+	_, err := spool.Write(data)
+	if err != nil {
+		t.Fatalf("Write error: %v", err)
+	}
+
+	// Should go to disk since 50% >= 50%
+	if spool.FileName() == "" {
+		t.Error("Expected spool to go to disk (50%% >= 50%%), but stayed in memory")
+	}
+}
+
+// TestMemoryThresholdAboveLimit verifies behavior when memory is above threshold (51%).
+func TestMemoryThresholdAboveLimit(t *testing.T) {
+	mockMemoryUsage(t, 0.51) // Mock memory at 51% (above 50% threshold)
+
+	spool := NewSpooledTempFile("test", os.TempDir(), 1024*1024, false, 0.50)
+	defer spool.Close()
+
+	data := []byte("Should go to disk")
+	_, err := spool.Write(data)
+	if err != nil {
+		t.Fatalf("Write error: %v", err)
+	}
+
+	// Should go to disk since 51% > 50%
+	if spool.FileName() == "" {
+		t.Error("Expected spool to go to disk (51%% > 50%%), but stayed in memory")
+	}
+}
+
 // TestBufferGrowthWithinLimits verifies that the buffer grows dynamically but never exceeds MaxInMemorySize.
 func TestBufferGrowthWithinLimits(t *testing.T) {
-	memoryUsageCache = &globalMemoryCache{}
+	mockMemoryUsage(t, 0.30) // Mock low memory usage (30%)
+
 	spool := NewSpooledTempFile("test", os.TempDir(), 128*1024, false, -1)
 	defer spool.Close()
 
@@ -473,6 +559,8 @@ func TestBufferGrowthWithinLimits(t *testing.T) {
 
 // TestPoolBehavior verifies that buffers exceeding InitialBufferSize are not returned to the pool.
 func TestPoolBehavior(t *testing.T) {
+	mockMemoryUsage(t, 0.30) // Mock low memory to ensure in-memory pooling behavior is tested
+
 	spool := NewSpooledTempFile("test", os.TempDir(), 150*1024, false, -1)
 	defer spool.Close()
 
@@ -503,6 +591,8 @@ func TestPoolBehavior(t *testing.T) {
 	}
 }
 
+// TestBufferGrowthBeyondNewCap verifies buffer behavior when growth exceeds threshold.
+// Note: This test doesn't mock memory because it writes 101KB to intentionally exceed the 100KB threshold.
 func TestBufferGrowthBeyondNewCap(t *testing.T) {
 	spool := NewSpooledTempFile("test", os.TempDir(), 100*1024, false, -1)
 	defer spool.Close()
@@ -546,6 +636,8 @@ func TestBufferGrowthBeyondNewCap(t *testing.T) {
 	}
 }
 
+// TestSpoolingWhenIOCopy verifies spooling behavior with io.Copy for large data.
+// Note: This test doesn't mock memory because it writes 500KB to intentionally trigger disk spooling.
 func TestSpoolingWhenIOCopy(t *testing.T) {
 	spool := NewSpooledTempFile("test", os.TempDir(), 100*1024, false, -1)
 	defer spool.Close()

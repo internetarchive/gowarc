@@ -11,8 +11,11 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 5
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
     steps:
     - uses: actions/checkout@v5
 
@@ -33,4 +36,27 @@ jobs:
 
     - name: Benchmarks
       run: go test -bench=. -benchmem -run=^$ ./...
-      
+
+    # Platform-specific test verification
+    - name: Test Linux-specific memory implementation
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        echo "Running Linux-specific memory tests..."
+        cd pkg/spooledtempfile
+        go test -v -run "TestCgroup|TestHostMeminfo|TestRead"
+
+    - name: Test macOS-specific memory implementation
+      if: matrix.os == 'macos-latest'
+      run: |
+        echo "Running macOS-specific memory tests..."
+        cd pkg/spooledtempfile
+        go test -v -run "TestGetSystemMemoryUsedFraction|TestSysctlMemoryValues|TestGetSysctlUint32"
+
+    # Cross-compilation verification
+    - name: Cross-compile for macOS (from Linux)
+      if: matrix.os == 'ubuntu-latest'
+      run: GOOS=darwin GOARCH=amd64 go build ./...
+
+    - name: Cross-compile for Linux (from macOS)
+      if: matrix.os == 'macos-latest'
+      run: GOOS=linux GOARCH=amd64 go build ./...
