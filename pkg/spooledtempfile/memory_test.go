@@ -23,8 +23,7 @@ func TestGetCachedMemoryUsage(t *testing.T) {
 	}()
 
 	// Reset cache
-	memoryUsageCache.lastChecked = time.Time{}
-	memoryUsageCache.lastFraction = 0
+	ResetMemoryCache()
 
 	// First call should invoke the function
 	frac1, err := getCachedMemoryUsage()
@@ -51,7 +50,9 @@ func TestGetCachedMemoryUsage(t *testing.T) {
 	}
 
 	// Simulate cache expiration
+	memoryUsageCache.Lock()
 	memoryUsageCache.lastChecked = time.Now().Add(-memoryCheckInterval - time.Millisecond)
+	memoryUsageCache.Unlock()
 
 	// Next call should invoke the function again
 	frac3, err := getCachedMemoryUsage()

@@ -50,7 +50,7 @@ jobs:
       run: |
         echo "Running macOS-specific memory tests..."
         cd pkg/spooledtempfile
-        go test -v -run "TestGetSystemMemoryUsedFraction|TestSysctlMemoryValues|TestGetSysctlUint32"
+        go test -v -run "TestGetSystemMemoryUsedFraction|TestSysctlMemoryValues|TestMemoryFractionConsistency"
 
     # Cross-compilation verification
     - name: Cross-compile for macOS (from Linux)

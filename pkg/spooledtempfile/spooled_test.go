@@ -17,12 +17,11 @@ import (
 func mockMemoryUsage(t *testing.T, fraction float64) {
 	t.Helper()
 
-	// Save originals
+	// Save original function
 	originalFn := getSystemMemoryUsedFraction
-	originalCache := memoryUsageCache
 
 	// Reset cache and mock function
-	memoryUsageCache = &globalMemoryCache{}
+	ResetMemoryCache()
 	getSystemMemoryUsedFraction = func() (float64, error) {
 		return fraction, nil
 	}
@@ -30,7 +29,6 @@ func mockMemoryUsage(t *testing.T, fraction float64) {
 	// Auto-restore on test completion
 	t.Cleanup(func() {
 		getSystemMemoryUsedFraction = originalFn
-		memoryUsageCache = originalCache
 		// Ensure global cache is clean to prevent state pollution to other test packages
 		ResetMemoryCache()
 	})
