@@ -90,7 +90,7 @@ func main() {
 		}
 	}()
 
-	// This is optional but the module give a feedback on a channel passed as context value "feedback" to the
+	// This is optional but the module give a feedback on a channel passed as context value to the
 	// request, this helps knowing when the record has been written to disk. If this is not used, the WARC
 	// writing is asynchronous
 	req, err := http.NewRequest("GET", "https://archive.org", nil)
@@ -99,7 +99,7 @@ func main() {
 	}
 
 	feedbackChan := make(chan struct{}, 1)
-	req = req.WithContext(context.WithValue(req.Context(), "feedback", feedbackChan))
+	req = req.WithContext(warc.WithFeedbackChannel(req.Context(), feedbackChan))
 
 	resp, err := client.Do(req)
 	if err != nil {

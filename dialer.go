@@ -24,6 +24,43 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+// contextKey is a custom type for context keys to avoid collisions
+type contextKey string
+
+const (
+	// ContextKeyFeedback is the context key for the feedback channel.
+	// When provided, the channel will receive a signal once the WARC record
+	// has been written to disk, making WARC writing synchronous.
+	// Use WithFeedbackChannel() helper function for convenience.
+	ContextKeyFeedback contextKey = "feedback"
+
+	// ContextKeyWrappedConn is the context key for the wrapped connection channel.
+	// This is used internally to retrieve the wrapped connection for advanced use cases.
+	// Use WithWrappedConnection() helper function for convenience.
+	ContextKeyWrappedConn contextKey = "wrappedConn"
+)
+
+// WithFeedbackChannel adds a feedback channel to the request context.
+// When provided, the channel will receive a signal once the WARC record
+// has been written to disk, making WARC writing synchronous.
+// Without this, WARC writing is asynchronous.
+//
+// Example:
+//
+//	feedbackChan := make(chan struct{}, 1)
+//	req = req.WithContext(warc.WithFeedbackChannel(req.Context(), feedbackChan))
+//	// ... perform request ...
+//	<-feedbackChan // blocks until WARC is written
+func WithFeedbackChannel(ctx context.Context, feedbackChan chan struct{}) context.Context {
+	return context.WithValue(ctx, ContextKeyFeedback, feedbackChan)
+}
+
+// WithWrappedConnection adds a wrapped connection channel to the request context.
+// This is used for advanced use cases where direct access to the connection is needed.
+func WithWrappedConnection(ctx context.Context, wrappedConnChan chan *CustomConnection) context.Context {
+	return context.WithValue(ctx, ContextKeyWrappedConn, wrappedConnChan)
+}
+
 type customDialer struct {
 	proxyDialer proxy.ContextDialer
 	client      *CustomHTTPClient
@@ -164,8 +201,8 @@ func (d *customDialer) wrapConnection(ctx context.Context, c net.Conn, scheme st
 		Writer:           io.MultiWriter(reqWriter, c),
 		connReadDeadline: d.client.ConnReadDeadline,
 	}
-	if ctx.Value("wrappedConn") != nil {
-		connChan, ok := ctx.Value("wrappedConn").(chan *CustomConnection)
+	if ctx.Value(ContextKeyWrappedConn) != nil {
+		connChan, ok := ctx.Value(ContextKeyWrappedConn).(chan *CustomConnection)
 		if !ok {
 			panic("wrapConnection: wrappedConn channel is not of type chan *CustomConnection")
 		}
@@ -311,8 +348,8 @@ func (d *customDialer) writeWARCFromConnection(ctx context.Context, reqPipe, res
 	// Defer the closing of the channel in case of an early return without mixing signals when the batch was properly sent
 	var feedbackChan chan struct{}
 	batchSent := false
-	if ctx.Value("feedback") != nil {
-		feedbackChan = ctx.Value("feedback").(chan struct{})
+	if ctx.Value(ContextKeyFeedback) != nil {
+		feedbackChan = ctx.Value(ContextKeyFeedback).(chan struct{})
 		defer func() {
 			if !batchSent {
 				close(feedbackChan)
