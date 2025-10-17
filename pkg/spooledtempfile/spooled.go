@@ -7,8 +7,6 @@ import (
 	"io"
 	"log"
 	"os"
-	"sync"
-	"time"
 
 	"github.com/valyala/bytebufferpool"
 )
@@ -20,18 +18,6 @@ const (
 	MaxInMemorySize = 1024 * 1024
 	// DefaultMaxRAMUsageFraction is the default fraction of system RAM above which we'll force spooling to disk
 	DefaultMaxRAMUsageFraction = 0.50
-	// memoryCheckInterval defines how often we check system memory usage.
-	memoryCheckInterval = 500 * time.Millisecond
-)
-
-type globalMemoryCache struct {
-	sync.Mutex
-	lastChecked  time.Time
-	lastFraction float64
-}
-
-var (
-	memoryUsageCache = &globalMemoryCache{}
 )
 
 // ReaderAt is the interface for ReadAt - read at position, without moving pointer.
@@ -268,23 +254,4 @@ func (s *spooledTempFile) isSystemMemoryUsageHigh() bool {
 		return true
 	}
 	return usedFraction >= s.maxRAMUsageFraction
-}
-
-func getCachedMemoryUsage() (float64, error) {
-	memoryUsageCache.Lock()
-	defer memoryUsageCache.Unlock()
-
-	if time.Since(memoryUsageCache.lastChecked) < memoryCheckInterval {
-		return memoryUsageCache.lastFraction, nil
-	}
-
-	fraction, err := getSystemMemoryUsedFraction()
-	if err != nil {
-		return 0, err
-	}
-
-	memoryUsageCache.lastChecked = time.Now()
-	memoryUsageCache.lastFraction = fraction
-
-	return fraction, nil
 }
