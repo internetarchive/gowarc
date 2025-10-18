@@ -13,9 +13,11 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -1782,6 +1784,375 @@ func TestHTTPClientWithIPv6Disabled(t *testing.T) {
 
 	for _, path := range files {
 		testFileSingleHashCheck(t, path, "sha1:JZIRQ2YRCQ55F6SSNPTXHKMDSKJV6QFM", []string{"147"}, 1, ipv4URL+"/")
+	}
+}
+
+func TestHTTPClientPOSTWithTextPayload(t *testing.T) {
+	var (
+		rotatorSettings = defaultRotatorSettings(t)
+		err             error
+	)
+
+	// Create a test server that expects POST requests and echoes back the received body
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			t.Errorf("Expected POST request, got %s", r.Method)
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("Failed to read request body: %v", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("Received: "))
+		w.Write(body)
+	}))
+	defer server.Close()
+
+	// Initialize the WARC-writing HTTP client
+	httpClient, err := NewWARCWritingHTTPClient(HTTPClientSettings{RotatorSettings: rotatorSettings})
+	if err != nil {
+		t.Fatalf("Unable to init WARC writing HTTP client: %s", err)
+	}
+	waitForErrors := drainErrChan(t, httpClient.ErrChan)
+
+	// Create a POST request with a text payload
+	requestBody := strings.NewReader("Hello from POST request")
+	req, err := http.NewRequest("POST", server.URL, requestBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "text/plain")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	io.Copy(io.Discard, resp.Body)
+
+	httpClient.Close()
+	waitForErrors()
+
+	files, err := filepath.Glob(rotatorSettings.OutputDirectory + "/*")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify the WARC file was created
+	if len(files) == 0 {
+		t.Fatal("No WARC files were created")
+	}
+
+	// Check the WARC records contain the POST request and response
+	for _, path := range files {
+		testFileHash(t, path)
+
+		file, err := os.Open(path)
+		if err != nil {
+			t.Fatalf("failed to open %q: %v", path, err)
+		}
+		defer file.Close()
+
+		reader, err := NewReader(file)
+		if err != nil {
+			t.Fatalf("warc.NewReader failed for %q: %v", path, err)
+		}
+
+		foundRequest := false
+		foundResponse := false
+
+		for {
+			record, err := reader.ReadRecord()
+			if err != nil {
+				if err == io.EOF {
+					break
+				}
+				t.Fatalf("warc.ReadRecord failed: %v", err)
+			}
+
+			// Check for request record
+			if record.Header.Get("WARC-Type") == "request" {
+				foundRequest = true
+				record.Content.Seek(0, 0)
+				content, _ := io.ReadAll(record.Content)
+				contentStr := string(content)
+
+				// Verify it's a POST request
+				if !strings.Contains(contentStr, "POST") {
+					t.Errorf("Request record does not contain POST method")
+				}
+
+				// Verify the request body is present
+				if !strings.Contains(contentStr, "Hello from POST request") {
+					t.Errorf("Request record does not contain the expected request body")
+				}
+			}
+
+			// Check for response record
+			if record.Header.Get("WARC-Type") == "response" {
+				foundResponse = true
+			}
+
+			record.Content.Close()
+		}
+
+		if !foundRequest {
+			t.Error("No request record found in WARC file")
+		}
+		if !foundResponse {
+			t.Error("No response record found in WARC file")
+		}
+	}
+}
+
+func TestHTTPClientPOSTWithJSONPayload(t *testing.T) {
+	var (
+		rotatorSettings = defaultRotatorSettings(t)
+		err             error
+	)
+
+	// Create a test server that expects POST requests with JSON
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			t.Errorf("Expected POST request, got %s", r.Method)
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+
+		if r.Header.Get("Content-Type") != "application/json" {
+			t.Errorf("Expected Content-Type: application/json, got %s", r.Header.Get("Content-Type"))
+		}
+
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("Failed to read request body: %v", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		w.Write([]byte(`{"status":"success","received":`))
+		w.Write(body)
+		w.Write([]byte(`}`))
+	}))
+	defer server.Close()
+
+	// Initialize the WARC-writing HTTP client
+	httpClient, err := NewWARCWritingHTTPClient(HTTPClientSettings{RotatorSettings: rotatorSettings})
+	if err != nil {
+		t.Fatalf("Unable to init WARC writing HTTP client: %s", err)
+	}
+	waitForErrors := drainErrChan(t, httpClient.ErrChan)
+
+	// Create a POST request with a JSON payload
+	jsonPayload := `{"name":"test","value":123}`
+	requestBody := strings.NewReader(jsonPayload)
+	req, err := http.NewRequest("POST", server.URL, requestBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	io.Copy(io.Discard, resp.Body)
+
+	httpClient.Close()
+	waitForErrors()
+
+	files, err := filepath.Glob(rotatorSettings.OutputDirectory + "/*")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify the WARC file was created
+	if len(files) == 0 {
+		t.Fatal("No WARC files were created")
+	}
+
+	// Check the WARC records contain the POST request with JSON body
+	for _, path := range files {
+		testFileHash(t, path)
+
+		file, err := os.Open(path)
+		if err != nil {
+			t.Fatalf("failed to open %q: %v", path, err)
+		}
+		defer file.Close()
+
+		reader, err := NewReader(file)
+		if err != nil {
+			t.Fatalf("warc.NewReader failed for %q: %v", path, err)
+		}
+
+		foundJSONRequest := false
+
+		for {
+			record, err := reader.ReadRecord()
+			if err != nil {
+				if err == io.EOF {
+					break
+				}
+				t.Fatalf("warc.ReadRecord failed: %v", err)
+			}
+
+			// Check for request record
+			if record.Header.Get("WARC-Type") == "request" {
+				record.Content.Seek(0, 0)
+				content, _ := io.ReadAll(record.Content)
+				contentStr := string(content)
+
+				// Verify it's a POST request
+				if !strings.Contains(contentStr, "POST") {
+					t.Errorf("Request record does not contain POST method")
+				}
+
+				// Verify the JSON payload is present
+				if strings.Contains(contentStr, jsonPayload) {
+					foundJSONRequest = true
+				}
+			}
+
+			record.Content.Close()
+		}
+
+		if !foundJSONRequest {
+			t.Error("JSON payload not found in request record")
+		}
+	}
+}
+
+func TestHTTPClientPOSTWithFormData(t *testing.T) {
+	var (
+		rotatorSettings = defaultRotatorSettings(t)
+		err             error
+	)
+
+	// Create a test server that expects POST requests with form data
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			t.Errorf("Expected POST request, got %s", r.Method)
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+
+		err := r.ParseForm()
+		if err != nil {
+			t.Errorf("Failed to parse form: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
+		username := r.FormValue("username")
+		password := r.FormValue("password")
+
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("Login attempt for user: " + username + " (password length: " + strconv.Itoa(len(password)) + ")"))
+	}))
+	defer server.Close()
+
+	// Initialize the WARC-writing HTTP client
+	httpClient, err := NewWARCWritingHTTPClient(HTTPClientSettings{RotatorSettings: rotatorSettings})
+	if err != nil {
+		t.Fatalf("Unable to init WARC writing HTTP client: %s", err)
+	}
+	waitForErrors := drainErrChan(t, httpClient.ErrChan)
+
+	// Create a POST request with form data
+	formData := url.Values{}
+	formData.Set("username", "testuser")
+	formData.Set("password", "testpass123")
+
+	req, err := http.NewRequest("POST", server.URL, strings.NewReader(formData.Encode()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	io.Copy(io.Discard, resp.Body)
+
+	httpClient.Close()
+	waitForErrors()
+
+	files, err := filepath.Glob(rotatorSettings.OutputDirectory + "/*")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify the WARC file was created
+	if len(files) == 0 {
+		t.Fatal("No WARC files were created")
+	}
+
+	// Check the WARC records contain the POST request with form data
+	for _, path := range files {
+		testFileHash(t, path)
+
+		file, err := os.Open(path)
+		if err != nil {
+			t.Fatalf("failed to open %q: %v", path, err)
+		}
+		defer file.Close()
+
+		reader, err := NewReader(file)
+		if err != nil {
+			t.Fatalf("warc.NewReader failed for %q: %v", path, err)
+		}
+
+		foundFormRequest := false
+
+		for {
+			record, err := reader.ReadRecord()
+			if err != nil {
+				if err == io.EOF {
+					break
+				}
+				t.Fatalf("warc.ReadRecord failed: %v", err)
+			}
+
+			// Check for request record
+			if record.Header.Get("WARC-Type") == "request" {
+				record.Content.Seek(0, 0)
+				content, _ := io.ReadAll(record.Content)
+				contentStr := string(content)
+
+				// Verify it's a POST request
+				if !strings.Contains(contentStr, "POST") {
+					t.Errorf("Request record does not contain POST method")
+				}
+
+				// Verify the form data is present (URL-encoded)
+				if strings.Contains(contentStr, "username=testuser") && strings.Contains(contentStr, "password=testpass123") {
+					foundFormRequest = true
+				}
+			}
+
+			record.Content.Close()
+		}
+
+		if !foundFormRequest {
+			t.Error("Form data not found in request record")
+		}
 	}
 }
 
