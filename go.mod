@@ -4,10 +4,10 @@ go 1.24.2
 
 require (
 	github.com/google/uuid v1.6.0
-	github.com/klauspost/compress v1.18.0
+	github.com/klauspost/compress v1.18.1
 	github.com/maypok86/otter v1.2.4
 	github.com/miekg/dns v1.1.68
-	github.com/refraction-networking/utls v1.8.0
+	github.com/refraction-networking/utls v1.8.1
 	github.com/remeh/sizedwaitgroup v1.0.0
 	github.com/spf13/cobra v1.10.1
 	github.com/things-go/go-socks5 v0.1.0
