@@ -254,7 +254,8 @@ func (r *Reader) ReadRecord(opts ...ReadOpts) (*Record, error) {
 		}
 	}
 
-	warcVer, _, err := readUntilDelim(r.bufReader, []byte("\r\n"))
+	_warcVer, _, err := readUntilDelim(r.bufReader, []byte("\r\n"))
+	warcVer := string(_warcVer) // clone to avoid changes in underlying buffer
 	if err != nil {
 		if err == io.EOF && len(warcVer) == 0 {
 			// treat as EOF for safety if member present but empty
