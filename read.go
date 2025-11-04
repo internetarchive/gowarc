@@ -263,6 +263,10 @@ func (r *Reader) ReadRecord(opts ...ReadOpts) (*Record, error) {
 		}
 		return nil, fmt.Errorf("reading WARC version: %w", err)
 	}
+	// Copy the WARC version before parsing headers since readUntilDelim reuses
+	// its backing buffer via a sync.Pool. Without copying, subsequent calls may
+	// overwrite the data referenced by warcVer, resulting in corrupted versions.
+	warcVersion := string(warcVer)
 
 	header := NewHeader()
 	for {
@@ -331,7 +335,7 @@ func (r *Reader) ReadRecord(opts ...ReadOpts) (*Record, error) {
 	record := &Record{
 		Header:  header,
 		Content: buf,
-		Version: string(warcVer),
+		Version: warcVersion,
 		Offset:  offset,
 		Size:    size,
 	}

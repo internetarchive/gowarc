@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"errors"
+	"fmt"
 	"io"
 	"math/big"
 	"net"
@@ -63,6 +64,46 @@ func defaultBenchmarkRotatorSettings(t *testing.B) *RotatorSettings {
 	defer os.RemoveAll(rotatorSettings.OutputDirectory)
 
 	return rotatorSettings
+}
+
+// sumRecordContentLengths returns the total Content-Length across all records in a WARC file.
+func sumRecordContentLengths(path string) (int64, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return 0, err
+	}
+	defer file.Close()
+
+	reader, err := NewReader(file)
+	if err != nil {
+		return 0, err
+	}
+
+	var total int64
+	for {
+		record, err := reader.ReadRecord()
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return 0, err
+		}
+
+		clStr := record.Header.Get("Content-Length")
+		cl, err := strconv.ParseInt(clStr, 10, 64)
+		if err != nil {
+			record.Content.Close()
+			return 0, fmt.Errorf("parsing Content-Length %q: %w", clStr, err)
+		}
+
+		total += cl
+
+		if err := record.Content.Close(); err != nil {
+			return 0, err
+		}
+	}
+
+	return total, nil
 }
 
 // Helper function used in many tests
@@ -155,21 +196,27 @@ func TestHTTPClient(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	var expectedPayloadBytes int64
 	for _, path := range files {
 		testFileSingleHashCheck(t, path, "sha1:UIRWL5DFIPQ4MX3D3GFHM2HCVU3TZ6I3", []string{"26872"}, 1, server.URL+"/testdata/image.svg")
+
+		totalBytes, err := sumRecordContentLengths(path)
+		if err != nil {
+			t.Fatalf("failed to sum record content lengths for %s: %v", path, err)
+		}
+		expectedPayloadBytes += totalBytes
 	}
 
 	// verify that the remote dedupe count is correct
 	dataTotal := httpClient.DataTotal.Load()
-	if dataTotal < 27130 || dataTotal > 27160 {
-		t.Fatalf("total bytes downloaded mismatch, expected: 27130-27160 got: %d", dataTotal)
+	if dataTotal != expectedPayloadBytes {
+		t.Fatalf("total bytes downloaded mismatch, expected %d got %d", expectedPayloadBytes, dataTotal)
 	}
 }
 
 func TestHTTPClientRequestFailing(t *testing.T) {
 	var (
 		rotatorSettings = defaultRotatorSettings(t)
-		errWg           sync.WaitGroup
 		err             error
 	)
 
@@ -182,11 +229,14 @@ func TestHTTPClientRequestFailing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Unable to init WARC writing HTTP client: %s", err)
 	}
-	errWg.Add(1)
+
+	errCh := make(chan *Error, 1)
+	var errChWg sync.WaitGroup
+	errChWg.Add(1)
 	go func() {
-		defer errWg.Done()
-		for _ = range httpClient.ErrChan {
-			// We expect an error here, so we don't need to log it
+		defer errChWg.Done()
+		for err := range httpClient.ErrChan {
+			errCh <- err
 		}
 	}()
 
@@ -201,10 +251,21 @@ func TestHTTPClientRequestFailing(t *testing.T) {
 
 	_, err = httpClient.Do(req)
 	if err == nil {
-		t.Fatal("expected error on Do, got none")
+		select {
+		case recv := <-errCh:
+			if recv == nil {
+				t.Fatal("expected error via ErrChan but channel closed without value")
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("expected error on Do or via ErrChan, got none")
+		}
+	} else {
+		t.Logf("got expected error: %v", err)
 	}
 
 	httpClient.Close()
+	errChWg.Wait()
+	close(errCh)
 }
 
 func TestHTTPClientConnReadDeadline(t *testing.T) {
@@ -596,15 +657,15 @@ func TestHTTPClientWithProxy(t *testing.T) {
 
 	// init socks5 proxy server
 	proxyServer := socks5.NewServer()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen for proxy: %v", err)
+	}
 
 	// Create a channel to signal server stop
 	stopChan := make(chan struct{})
 
 	go func() {
-		listener, err := net.Listen("tcp", "127.0.0.1:8000")
-		if err != nil {
-			panic(err)
-		}
 		defer listener.Close()
 
 		go func() {
@@ -617,6 +678,7 @@ func TestHTTPClientWithProxy(t *testing.T) {
 		}
 	}()
 
+	proxyAddr := listener.Addr().String()
 	// Defer sending the stop signal
 	defer close(stopChan)
 
@@ -627,7 +689,7 @@ func TestHTTPClientWithProxy(t *testing.T) {
 	// init the HTTP client responsible for recording HTTP(s) requests / responses
 	httpClient, err := NewWARCWritingHTTPClient(HTTPClientSettings{
 		RotatorSettings: rotatorSettings,
-		Proxy:           "socks5://127.0.0.1:8000"})
+		Proxy:           fmt.Sprintf("socks5://%s", proxyAddr)})
 	if err != nil {
 		t.Fatalf("Unable to init WARC writing HTTP client: %s", err)
 	}
