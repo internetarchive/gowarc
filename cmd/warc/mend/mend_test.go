@@ -6,15 +6,25 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/internetarchive/gowarc/cmd/warc/verify"
 	"github.com/spf13/cobra"
 )
 
+// getTestdataDir returns the path to the testdata directory, resolved relative to this test file.
+// This ensures tests work regardless of the working directory (e.g., from root, CI/CD, etc.).
+// Test file is at: cmd/warc/mend/mend_test.go, testdata is at: testdata/warcs
+// So we need to go up 3 levels from the test file.
+func getTestdataDir() string {
+	_, filename, _, _ := runtime.Caller(1)
+	return filepath.Join(filepath.Dir(filename), "../../../testdata/warcs")
+}
+
 // TestAnalyzeWARCFile tests the analysis of different WARC files
 func TestAnalyzeWARCFile(t *testing.T) {
-	testdataDir := "../../testdata/warcs"
+	testdataDir := getTestdataDir()
 
 	tests := []struct {
 		name            string
@@ -128,7 +138,7 @@ func TestAnalyzeWARCFile(t *testing.T) {
 
 // TestMendResultValidation tests that mendResult structs are properly populated
 func TestMendResultValidation(t *testing.T) {
-	testdataDir := "../../testdata/warcs"
+	testdataDir := getTestdataDir()
 
 	// Test a file that should have all fields populated
 	filePath := filepath.Join(testdataDir, "corrupted-trailing-bytes.warc.gz.open")
@@ -183,7 +193,7 @@ func TestMendResultValidation(t *testing.T) {
 
 // TestAnalyzeWARCFileForceMode tests analyzeWARCFile with force=true on good closed WARC files
 func TestAnalyzeWARCFileForceMode(t *testing.T) {
-	testdataDir := "../../testdata/warcs"
+	testdataDir := getTestdataDir()
 
 	tests := []struct {
 		name            string
@@ -255,7 +265,7 @@ func TestAnalyzeWARCFileForceMode(t *testing.T) {
 
 // TestSkipNonOpenFiles tests that non-.open files are correctly skipped
 func TestSkipNonOpenFiles(t *testing.T) {
-	testdataDir := "../../testdata/warcs"
+	testdataDir := getTestdataDir()
 	filePath := filepath.Join(testdataDir, "skip-non-open.warc.gz")
 
 	// Check if test file exists
@@ -305,7 +315,7 @@ var mendExpectedResults = map[string]expectedResult{
 		recordCount:   1, // Actual count from mend operation
 		truncateAt:    0, // No truncation needed
 		description:   "good synthetic file with .open suffix",
-		shouldBeValid: false, // File has WARC header corruption that mend can't fix
+		shouldBeValid: true, // After removing the .open suffix the WARC remains valid
 	},
 	"empty.warc.gz.open": {
 		outputFile:    "empty.warc.gz",
@@ -321,7 +331,7 @@ var mendExpectedResults = map[string]expectedResult{
 		recordCount:   1,    // Actual count from mend operation
 		truncateAt:    2362, // Truncates trailing garbage
 		description:   "synthetic file with trailing garbage bytes",
-		shouldBeValid: false, // File has WARC header corruption that mend can't fix
+		shouldBeValid: true, // Truncating the trailing garbage yields a valid WARC record
 	},
 	"corrupted-mid-record.warc.gz.open": {
 		outputFile:    "corrupted-mid-record.warc.gz",
@@ -329,7 +339,7 @@ var mendExpectedResults = map[string]expectedResult{
 		recordCount:   1, // Actual count from mend operation
 		truncateAt:    1219,
 		description:   "synthetic file corrupted mid-record",
-		shouldBeValid: false, // File has WARC header corruption that mend can't fix
+		shouldBeValid: true, // Truncating back to the last valid position restores a valid record
 	},
 }
 
@@ -359,14 +369,7 @@ func createMockCobraCommand() *cobra.Command {
 // TestMendFunctionDirect verifies that the mend function produces
 // expected results on synthetic test data by comparing against pre-computed checksums
 func TestMendFunctionDirect(t *testing.T) {
-	// Get current directory and construct paths relative to workspace root
-	cwd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("failed to get current directory: %v", err)
-	}
-	// From cmd/mend, go up to workspace root
-	workspaceRoot := filepath.Join(cwd, "../..")
-	testdataDir := filepath.Join(workspaceRoot, "testdata/warcs")
+	testdataDir := getTestdataDir()
 	outputDir := filepath.Join(testdataDir, "mend_test_output")
 
 	// Ensure output directory exists
@@ -505,7 +508,7 @@ func copyFile(src, dst string) error {
 
 // TestIsGzipFile tests the gzip file detection function
 func TestIsGzipFile(t *testing.T) {
-	testdataDir := "../../testdata/warcs"
+	testdataDir := getTestdataDir()
 
 	tests := []struct {
 		name     string
@@ -643,7 +646,7 @@ func TestConfirmAction(t *testing.T) {
 
 // TestMendDryRun tests the mend function in dry-run mode
 func TestMendDryRun(t *testing.T) {
-	testdataDir := "../../testdata/warcs"
+	testdataDir := getTestdataDir()
 	tempDir, err := os.MkdirTemp("", "mend_dry_run_test_*")
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
