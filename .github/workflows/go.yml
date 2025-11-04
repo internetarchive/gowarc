@@ -28,13 +28,20 @@ jobs:
       run: go build -v ./...
 
     - name: Goroutine leak detector
+      if: matrix.os == 'ubuntu-latest'
       continue-on-error: true
       run: go test -c -o tests && for test in $(go test -list . | grep -E "^(Test|Example)"); do ./tests -test.run "^$test\$" &>/dev/null && echo -e "$test passed\n" || echo -e "$test failed\n"; done
 
-    - name: Test
+    - name: Test (Full Suite)
+      if: matrix.os == 'ubuntu-latest'
       run: go test -race -v ./...
 
+    - name: Test (spooledtempfile only)
+      if: matrix.os == 'macos-latest'
+      run: go test -race -v ./pkg/spooledtempfile/...
+
     - name: Benchmarks
+      if: matrix.os == 'ubuntu-latest'
       run: go test -bench=. -benchmem -run=^$ ./...
 
     # Platform-specific test verification
