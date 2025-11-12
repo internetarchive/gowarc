@@ -291,28 +291,37 @@ func testFileEarlyEOF(t *testing.T, path string) {
 	if err != nil {
 		t.Fatalf("failed to open %q: %v", path, err)
 	}
+
 	reader, err := NewReader(file)
 	if err != nil {
 		t.Fatalf("warc.NewReader failed for %q: %v", path, err)
 	}
+
 	reader.cr = &countingReader{r: reader.src}
 
 	// read the file into memory
 	reader.dec, reader.compType, err = reader.cr.newDecompressionReader()
+	if err != nil {
+		t.Fatalf("failed to create decompression reader: %v", err)
+	}
+
 	data, err := io.ReadAll(reader.dec)
 	if err != nil {
 		t.Fatalf("failed to read %q: %v", path, err)
 	}
+
 	// delete the last two bytes (\r\n)
 	if data[len(data)-2] != '\r' || data[len(data)-1] != '\n' {
 		t.Fatalf("expected \\r\\n, got %q", data[len(data)-2:])
 	}
+
 	data = data[:len(data)-2]
 	// new reader
 	reader, err = NewReader(io.NopCloser(bytes.NewReader(data)))
 	if err != nil {
 		t.Fatalf("warc.NewReader failed for %q: %v", path, err)
 	}
+
 	// read the records
 	for {
 		record, err := reader.ReadRecord()
@@ -329,6 +338,7 @@ func testFileEarlyEOF(t *testing.T, path string) {
 		}
 		record.Content.Close()
 	}
+
 	t.Fatalf("expected `reading record boundary: EOF`, got none")
 }
 

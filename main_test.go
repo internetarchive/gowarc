@@ -8,5 +8,5 @@ import (
 
 // Verify leaks in ALL package tests.
 func TestMain(m *testing.M) {
-  goleak.VerifyTestMain(m)
+	goleak.VerifyTestMain(m)
 }

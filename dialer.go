@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -61,15 +62,22 @@ func WithWrappedConnection(ctx context.Context, wrappedConnChan chan *CustomConn
 	return context.WithValue(ctx, ContextKeyWrappedConn, wrappedConnChan)
 }
 
+// dnsExchanger is an interface for DNS clients that can exchange messages
+type dnsExchanger interface {
+	ExchangeContext(ctx context.Context, m *dns.Msg, address string) (r *dns.Msg, rtt time.Duration, err error)
+}
+
 type customDialer struct {
 	proxyDialer proxy.ContextDialer
 	client      *CustomHTTPClient
 	DNSConfig   *dns.ClientConfig
-	DNSClient   *dns.Client
+	DNSClient   dnsExchanger
 	DNSRecords  *otter.Cache[string, net.IP]
 	net.Dialer
-	disableIPv4 bool
-	disableIPv6 bool
+	disableIPv4        bool
+	disableIPv6        bool
+	dnsConcurrency     int
+	dnsRoundRobinIndex atomic.Uint32
 }
 
 var emptyPayloadDigests = []string{
@@ -79,13 +87,14 @@ var emptyPayloadDigests = []string{
 	"blake3:af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262",
 }
 
-func newCustomDialer(httpClient *CustomHTTPClient, proxyURL string, DialTimeout, DNSRecordsTTL, DNSResolutionTimeout time.Duration, DNSCacheSize int, DNSServers []string, disableIPv4, disableIPv6 bool) (d *customDialer, err error) {
+func newCustomDialer(httpClient *CustomHTTPClient, proxyURL string, DialTimeout, DNSRecordsTTL, DNSResolutionTimeout time.Duration, DNSCacheSize int, DNSServers []string, DNSConcurrency int, disableIPv4, disableIPv6 bool) (d *customDialer, err error) {
 	d = new(customDialer)
 
 	d.Timeout = DialTimeout
 	d.client = httpClient
 	d.disableIPv4 = disableIPv4
 	d.disableIPv6 = disableIPv6
+	d.dnsConcurrency = DNSConcurrency
 
 	DNScache, err := otter.MustBuilder[string, net.IP](DNSCacheSize).
 		// CollectStats(). // Uncomment this line to enable stats collection, can be useful later on
@@ -230,9 +239,10 @@ func (d *customDialer) CustomDialContext(ctx context.Context, network, address s
 		if d.client.randomLocalIP {
 			localAddr := getLocalAddr(network, IP)
 			if localAddr != nil {
-				if network == "tcp" || network == "tcp4" || network == "tcp6" {
+				switch network {
+				case "tcp", "tcp4", "tcp6":
 					d.LocalAddr = localAddr.(*net.TCPAddr)
-				} else if network == "udp" || network == "udp4" || network == "udp6" {
+				case "udp", "udp4", "udp6":
 					d.LocalAddr = localAddr.(*net.UDPAddr)
 				}
 			}
@@ -272,9 +282,10 @@ func (d *customDialer) CustomDialTLSContext(ctx context.Context, network, addres
 		if d.client.randomLocalIP {
 			localAddr := getLocalAddr(network, IP)
 			if localAddr != nil {
-				if network == "tcp" || network == "tcp4" || network == "tcp6" {
+				switch network {
+				case "tcp", "tcp4", "tcp6":
 					d.LocalAddr = localAddr.(*net.TCPAddr)
-				} else if network == "udp" || network == "udp4" || network == "udp6" {
+				case "udp", "udp4", "udp6":
 					d.LocalAddr = localAddr.(*net.UDPAddr)
 				}
 			}
