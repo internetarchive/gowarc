@@ -12,7 +12,7 @@ A Go library for reading and writing [WARC files](https://iipc.github.io/warc-sp
 - Content deduplication (local URL-agnostic and CDX-based)
 - Configurable file rotation and size limits
 - DNS caching and custom DNS resolution (with DNS archiving)
-- Support for socks5 proxies and custom TLS configurations
+- Multiple socks5 proxies with round-robin load balancing and automatic fallback
 - Random local IP assignment for distributed crawling (including Linux kernel AnyIP feature)
 - Smart memory management with disk spooling options
 - IPv4/IPv6 support with configurable preferences
@@ -55,7 +55,7 @@ func main() {
 	// Configure HTTP client settings
 	clientSettings := warc.HTTPClientSettings{
 		RotatorSettings: rotatorSettings,
-		Proxy:           "socks5://proxy.example.com:1080",
+		Proxies:         []string{"socks5://proxy1.example.com:1080", "socks5://proxy2.example.com:1080"}, // Multiple proxies with round-robin and automatic fallback
 		TempDir:         "./temp",
 		DNSServers:      []string{"8.8.8.8", "8.8.4.4"},
 		DedupeOptions: warc.DedupeOptions{

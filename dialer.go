@@ -68,11 +68,12 @@ type dnsExchanger interface {
 }
 
 type customDialer struct {
-	proxyDialer proxy.ContextDialer
-	client      *CustomHTTPClient
-	DNSConfig   *dns.ClientConfig
-	DNSClient   dnsExchanger
-	DNSRecords  *otter.Cache[string, net.IP]
+	proxyDialers       []proxy.ContextDialer
+	proxyRoundRobinIndex atomic.Uint32
+	client               *CustomHTTPClient
+	DNSConfig            *dns.ClientConfig
+	DNSClient            dnsExchanger
+	DNSRecords           *otter.Cache[string, net.IP]
 	net.Dialer
 	disableIPv4        bool
 	disableIPv6        bool
@@ -87,7 +88,7 @@ var emptyPayloadDigests = []string{
 	"blake3:af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262",
 }
 
-func newCustomDialer(httpClient *CustomHTTPClient, proxyURL string, DialTimeout, DNSRecordsTTL, DNSResolutionTimeout time.Duration, DNSCacheSize int, DNSServers []string, DNSConcurrency int, disableIPv4, disableIPv6 bool) (d *customDialer, err error) {
+func newCustomDialer(httpClient *CustomHTTPClient, proxyURLs []string, DialTimeout, DNSRecordsTTL, DNSResolutionTimeout time.Duration, DNSCacheSize int, DNSServers []string, DNSConcurrency int, disableIPv4, disableIPv6 bool) (d *customDialer, err error) {
 	d = new(customDialer)
 
 	d.Timeout = DialTimeout
@@ -120,21 +121,68 @@ func newCustomDialer(httpClient *CustomHTTPClient, proxyURL string, DialTimeout,
 		Timeout: DNSResolutionTimeout,
 	}
 
-	if proxyURL != "" {
-		u, err := url.Parse(proxyURL)
-		if err != nil {
-			return nil, err
-		}
+	// Initialize multiple proxy dialers
+	d.proxyDialers = make([]proxy.ContextDialer, 0, len(proxyURLs))
+	for _, proxyURL := range proxyURLs {
+		if proxyURL != "" {
+			u, err := url.Parse(proxyURL)
+			if err != nil {
+				return nil, fmt.Errorf("invalid proxy URL %s: %w", proxyURL, err)
+			}
 
-		var proxyDialer proxy.Dialer
-		if proxyDialer, err = proxy.FromURL(u, d); err != nil {
-			return nil, err
-		}
+			var proxyDialer proxy.Dialer
+			if proxyDialer, err = proxy.FromURL(u, d); err != nil {
+				return nil, fmt.Errorf("failed to create proxy from %s: %w", proxyURL, err)
+			}
 
-		d.proxyDialer = proxyDialer.(proxy.ContextDialer)
+			d.proxyDialers = append(d.proxyDialers, proxyDialer.(proxy.ContextDialer))
+		}
 	}
 
 	return d, nil
+}
+
+// dialWithProxyFallback attempts to dial using proxies in round-robin order,
+// trying the next proxy on failure. If proxies are configured and all fail,
+// an error is returned (no fallback to direct connection). The IP parameter
+// is used for randomLocalIP assignment when using direct connection (no proxies).
+func (d *customDialer) dialWithProxyFallback(ctx context.Context, network, address string, IP net.IP) (net.Conn, error) {
+	if len(d.proxyDialers) == 0 {
+		// No proxies configured, use direct connection with randomLocalIP if enabled
+		if d.client.randomLocalIP {
+			localAddr := getLocalAddr(network, IP)
+			if localAddr != nil {
+				switch network {
+				case "tcp", "tcp4", "tcp6":
+					d.LocalAddr = localAddr.(*net.TCPAddr)
+				case "udp", "udp4", "udp6":
+					d.LocalAddr = localAddr.(*net.UDPAddr)
+				}
+			}
+		}
+		return d.DialContext(ctx, network, address)
+	}
+
+	// Try each proxy starting from round-robin position
+	startIdx := int(d.proxyRoundRobinIndex.Add(1)-1) % len(d.proxyDialers)
+	var proxyErrors []error
+
+	for i := 0; i < len(d.proxyDialers); i++ {
+		proxyIdx := (startIdx + i) % len(d.proxyDialers)
+		conn, err := d.proxyDialers[proxyIdx].DialContext(ctx, network, address)
+		if err == nil {
+			// Success with this proxy
+			return conn, nil
+		}
+		// Store error and try next proxy
+		proxyErrors = append(proxyErrors, fmt.Errorf("proxy %d: %w", proxyIdx, err))
+	}
+
+	// All proxies failed, return combined error (do NOT fall back to direct connection)
+	// Use errors.Join to properly wrap all proxy errors, enabling errors.Is/As inspection
+	// Error message format is optimized for log aggregation (constant prefix)
+	return nil, fmt.Errorf("all configured proxies failed (address=%s, proxy_count=%d): %w",
+		address, len(d.proxyDialers), errors.Join(proxyErrors...))
 }
 
 type CustomConnection struct {
@@ -233,24 +281,8 @@ func (d *customDialer) CustomDialContext(ctx context.Context, network, address s
 		return nil, err
 	}
 
-	if d.proxyDialer != nil {
-		conn, err = d.proxyDialer.DialContext(ctx, network, address)
-	} else {
-		if d.client.randomLocalIP {
-			localAddr := getLocalAddr(network, IP)
-			if localAddr != nil {
-				switch network {
-				case "tcp", "tcp4", "tcp6":
-					d.LocalAddr = localAddr.(*net.TCPAddr)
-				case "udp", "udp4", "udp6":
-					d.LocalAddr = localAddr.(*net.UDPAddr)
-				}
-			}
-		}
-
-		conn, err = d.DialContext(ctx, network, address)
-	}
-
+	// Use proxy fallback logic (tries proxies in round-robin, falls back to direct)
+	conn, err = d.dialWithProxyFallback(ctx, network, address, IP)
 	if err != nil {
 		return nil, err
 	}
@@ -274,26 +306,8 @@ func (d *customDialer) CustomDialTLSContext(ctx context.Context, network, addres
 		return nil, err
 	}
 
-	var plainConn net.Conn
-
-	if d.proxyDialer != nil {
-		plainConn, err = d.proxyDialer.DialContext(ctx, network, address)
-	} else {
-		if d.client.randomLocalIP {
-			localAddr := getLocalAddr(network, IP)
-			if localAddr != nil {
-				switch network {
-				case "tcp", "tcp4", "tcp6":
-					d.LocalAddr = localAddr.(*net.TCPAddr)
-				case "udp", "udp4", "udp6":
-					d.LocalAddr = localAddr.(*net.UDPAddr)
-				}
-			}
-		}
-
-		plainConn, err = d.DialContext(ctx, network, address)
-	}
-
+	// Use proxy fallback logic (tries proxies in round-robin, falls back to direct)
+	plainConn, err := d.dialWithProxyFallback(ctx, network, address, IP)
 	if err != nil {
 		return nil, err
 	}
@@ -457,7 +471,7 @@ func (d *customDialer) writeWARCFromConnection(ctx context.Context, reqPipe, res
 		case <-ctx.Done():
 			return
 		default:
-			if d.proxyDialer == nil {
+			if len(d.proxyDialers) == 0 {
 				switch addr := conn.RemoteAddr().(type) {
 				case *net.TCPAddr:
 					IP := addr.IP.String()

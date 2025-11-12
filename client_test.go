@@ -688,7 +688,7 @@ func TestHTTPClientWithProxy(t *testing.T) {
 	// init the HTTP client responsible for recording HTTP(s) requests / responses
 	httpClient, err := NewWARCWritingHTTPClient(HTTPClientSettings{
 		RotatorSettings: rotatorSettings,
-		Proxy:           fmt.Sprintf("socks5://%s", proxyAddr)})
+		Proxies:         []string{fmt.Sprintf("socks5://%s", proxyAddr)}})
 	if err != nil {
 		t.Fatalf("Unable to init WARC writing HTTP client: %s", err)
 	}
@@ -718,6 +718,224 @@ func TestHTTPClientWithProxy(t *testing.T) {
 	for _, path := range files {
 		testFileSingleHashCheck(t, path, "sha1:UIRWL5DFIPQ4MX3D3GFHM2HCVU3TZ6I3", []string{"26872"}, 1, server.URL+"/")
 	}
+}
+
+func TestHTTPClientWithMultipleProxies(t *testing.T) {
+	var (
+		rotatorSettings = defaultRotatorSettings(t)
+		err             error
+	)
+
+	// init three socks5 proxy servers
+	var proxyAddrs []string
+	var listeners []net.Listener
+	var stopChans []chan struct{}
+
+	for i := 0; i < 3; i++ {
+		proxyServer := socks5.NewServer()
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("failed to listen for proxy %d: %v", i, err)
+		}
+		listeners = append(listeners, listener)
+
+		stopChan := make(chan struct{})
+		stopChans = append(stopChans, stopChan)
+
+		go func(l net.Listener, stop chan struct{}) {
+			defer l.Close()
+
+			go func() {
+				<-stop
+				l.Close()
+			}()
+
+			if err := proxyServer.Serve(l); err != nil && !strings.Contains(err.Error(), "use of closed network connection") {
+				panic(err)
+			}
+		}(listener, stopChan)
+
+		proxyAddrs = append(proxyAddrs, fmt.Sprintf("socks5://%s", listener.Addr().String()))
+	}
+
+	// Defer cleanup
+	defer func() {
+		for _, stopChan := range stopChans {
+			close(stopChan)
+		}
+	}()
+
+	// init test HTTP endpoint
+	server := newTestImageServer(t, http.StatusOK)
+	defer server.Close()
+
+	// init the HTTP client with multiple proxies
+	httpClient, err := NewWARCWritingHTTPClient(HTTPClientSettings{
+		RotatorSettings: rotatorSettings,
+		Proxies:         proxyAddrs})
+	if err != nil {
+		t.Fatalf("Unable to init WARC writing HTTP client: %s", err)
+	}
+	waitForErrors := drainErrChan(t, httpClient.ErrChan)
+
+	// Make multiple requests to test round-robin
+	for i := 0; i < 6; i++ {
+		req, err := http.NewRequest("GET", server.URL, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		resp, err := httpClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+	}
+
+	httpClient.Close()
+	waitForErrors()
+
+	files, err := filepath.Glob(rotatorSettings.OutputDirectory + "/*")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify that 6 requests were recorded (each creates 2 WARC records)
+	for _, path := range files {
+		testFileSingleHashCheck(t, path, "sha1:UIRWL5DFIPQ4MX3D3GFHM2HCVU3TZ6I3", []string{"26872"}, 6, server.URL+"/")
+	}
+}
+
+func TestHTTPClientWithProxyFallback(t *testing.T) {
+	var (
+		rotatorSettings = defaultRotatorSettings(t)
+		err             error
+	)
+
+	// Create one working proxy and one invalid proxy
+	proxyServer := socks5.NewServer()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen for proxy: %v", err)
+	}
+
+	stopChan := make(chan struct{})
+
+	go func() {
+		defer listener.Close()
+
+		go func() {
+			<-stopChan
+			listener.Close()
+		}()
+
+		if err := proxyServer.Serve(listener); err != nil && !strings.Contains(err.Error(), "use of closed network connection") {
+			panic(err)
+		}
+	}()
+
+	workingProxyAddr := fmt.Sprintf("socks5://%s", listener.Addr().String())
+	invalidProxyAddr := "socks5://127.0.0.1:1" // Invalid proxy that should fail
+
+	defer close(stopChan)
+
+	// init test HTTP endpoint
+	server := newTestImageServer(t, http.StatusOK)
+	defer server.Close()
+
+	// init the HTTP client with invalid proxy first, then working proxy
+	// This tests fallback functionality
+	httpClient, err := NewWARCWritingHTTPClient(HTTPClientSettings{
+		RotatorSettings: rotatorSettings,
+		Proxies:         []string{invalidProxyAddr, workingProxyAddr}})
+	if err != nil {
+		t.Fatalf("Unable to init WARC writing HTTP client: %s", err)
+	}
+	waitForErrors := drainErrChan(t, httpClient.ErrChan)
+
+	req, err := http.NewRequest("GET", server.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	io.Copy(io.Discard, resp.Body)
+
+	httpClient.Close()
+	waitForErrors()
+
+	files, err := filepath.Glob(rotatorSettings.OutputDirectory + "/*")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Should succeed via fallback to working proxy
+	for _, path := range files {
+		testFileSingleHashCheck(t, path, "sha1:UIRWL5DFIPQ4MX3D3GFHM2HCVU3TZ6I3", []string{"26872"}, 1, server.URL+"/")
+	}
+}
+
+func TestHTTPClientWithAllProxiesFailing(t *testing.T) {
+	var (
+		rotatorSettings = defaultRotatorSettings(t)
+		err             error
+	)
+
+	// Create only invalid proxies
+	invalidProxies := []string{
+		"socks5://127.0.0.1:1", // Invalid proxy
+		"socks5://127.0.0.1:2", // Another invalid proxy
+	}
+
+	// init test HTTP endpoint
+	server := newTestImageServer(t, http.StatusOK)
+	defer server.Close()
+
+	// init the HTTP client with only invalid proxies
+	httpClient, err := NewWARCWritingHTTPClient(HTTPClientSettings{
+		RotatorSettings: rotatorSettings,
+		Proxies:         invalidProxies})
+	if err != nil {
+		t.Fatalf("Unable to init WARC writing HTTP client: %s", err)
+	}
+	waitForErrors := drainErrChan(t, httpClient.ErrChan)
+
+	req, err := http.NewRequest("GET", server.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// This request should FAIL because all proxies are invalid
+	// and we should NOT fall back to direct connection
+	resp, err := httpClient.Do(req)
+	if err == nil {
+		resp.Body.Close()
+		t.Fatal("Expected error when all proxies fail, but request succeeded")
+	}
+
+	// Verify error message has constant prefix for log aggregation
+	if !strings.Contains(err.Error(), "all configured proxies failed") {
+		t.Fatalf("Expected error about proxy failures, got: %s", err)
+	}
+
+	// Verify error includes structured context
+	if !strings.Contains(err.Error(), "proxy_count=2") {
+		t.Fatalf("Expected error to include proxy count, got: %s", err)
+	}
+
+	// Verify error includes info about both proxies that failed
+	if !strings.Contains(err.Error(), "proxy 0") || !strings.Contains(err.Error(), "proxy 1") {
+		t.Fatalf("Expected error to include details about both failed proxies, got: %s", err)
+	}
+
+	httpClient.Close()
+	waitForErrors()
 }
 
 func TestHTTPClientConcurrent(t *testing.T) {
