@@ -159,7 +159,6 @@ func setupMock() (*customDialer, func()) {
 	stopDrain := make(chan bool)
 	var drainerWg sync.WaitGroup
 	drainerWg.Go(func() {
-		defer drainerWg.Done()
 		for {
 			select {
 			case batch := <-d.client.WARCWriter:
