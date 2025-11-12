@@ -68,11 +68,12 @@ type dnsExchanger interface {
 }
 
 type customDialer struct {
-	proxyDialer proxy.ContextDialer
-	client      *CustomHTTPClient
-	DNSConfig   *dns.ClientConfig
-	DNSClient   dnsExchanger
-	DNSRecords  *otter.Cache[string, net.IP]
+	proxyDialer        proxy.ContextDialer
+	proxyNeedsHostname bool // true if proxy requires hostname (socks5h, http), false if can use IP (socks5)
+	client             *CustomHTTPClient
+	DNSConfig          *dns.ClientConfig
+	DNSClient          dnsExchanger
+	DNSRecords         *otter.Cache[string, net.IP]
 	net.Dialer
 	disableIPv4        bool
 	disableIPv6        bool
@@ -132,6 +133,12 @@ func newCustomDialer(httpClient *CustomHTTPClient, proxyURL string, DialTimeout,
 		}
 
 		d.proxyDialer = proxyDialer.(proxy.ContextDialer)
+
+		// Determine if this proxy requires hostname (remote DNS) or can use IP (local DNS)
+		// Proxies with remote DNS: socks5h, socks4a, http, https
+		// Proxies with local DNS: socks5, socks4
+		d.proxyNeedsHostname = u.Scheme == "socks5h" || u.Scheme == "socks4a" ||
+			u.Scheme == "http" || u.Scheme == "https"
 	}
 
 	return d, nil
@@ -228,13 +235,28 @@ func (d *customDialer) CustomDialContext(ctx context.Context, network, address s
 		return nil, errors.New("no supported network type available")
 	}
 
+	// Always resolve DNS for WARC archiving and caching
 	IP, _, err := d.archiveDNS(ctx, address)
 	if err != nil {
 		return nil, err
 	}
 
+	// Extract port from address for IP:port construction
+	_, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, fmt.Errorf("failed to extract port from address %s: %w", address, err)
+	}
+
+	// Determine the address to use for dialing
+	dialAddr := address // default: use hostname
+	if d.proxyDialer == nil || !d.proxyNeedsHostname {
+		// Use resolved IP for: direct connections OR proxies that support local DNS (socks5, socks4)
+		dialAddr = net.JoinHostPort(IP.String(), port)
+	}
+	// else: proxy needs hostname (socks5h, http), keep dialAddr = address
+
 	if d.proxyDialer != nil {
-		conn, err = d.proxyDialer.DialContext(ctx, network, address)
+		conn, err = d.proxyDialer.DialContext(ctx, network, dialAddr)
 	} else {
 		if d.client.randomLocalIP {
 			localAddr := getLocalAddr(network, IP)
@@ -248,7 +270,7 @@ func (d *customDialer) CustomDialContext(ctx context.Context, network, address s
 			}
 		}
 
-		conn, err = d.DialContext(ctx, network, address)
+		conn, err = d.DialContext(ctx, network, dialAddr)
 	}
 
 	if err != nil {
@@ -269,15 +291,30 @@ func (d *customDialer) CustomDialTLSContext(ctx context.Context, network, addres
 		return nil, errors.New("no supported network type available")
 	}
 
+	// Always resolve DNS for WARC archiving and caching
 	IP, _, err := d.archiveDNS(ctx, address)
 	if err != nil {
 		return nil, err
 	}
 
+	// Extract port from address for IP:port construction
+	_, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, fmt.Errorf("failed to extract port from address %s: %w", address, err)
+	}
+
+	// Determine the address to use for dialing
+	dialAddr := address // default: use hostname
+	if d.proxyDialer == nil || !d.proxyNeedsHostname {
+		// Use resolved IP for: direct connections OR proxies that support local DNS (socks5, socks4)
+		dialAddr = net.JoinHostPort(IP.String(), port)
+	}
+	// else: proxy needs hostname (socks5h, http), keep dialAddr = address
+
 	var plainConn net.Conn
 
 	if d.proxyDialer != nil {
-		plainConn, err = d.proxyDialer.DialContext(ctx, network, address)
+		plainConn, err = d.proxyDialer.DialContext(ctx, network, dialAddr)
 	} else {
 		if d.client.randomLocalIP {
 			localAddr := getLocalAddr(network, IP)
@@ -291,7 +328,7 @@ func (d *customDialer) CustomDialTLSContext(ctx context.Context, network, addres
 			}
 		}
 
-		plainConn, err = d.DialContext(ctx, network, address)
+		plainConn, err = d.DialContext(ctx, network, dialAddr)
 	}
 
 	if err != nil {
