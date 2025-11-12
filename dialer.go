@@ -235,25 +235,33 @@ func (d *customDialer) CustomDialContext(ctx context.Context, network, address s
 		return nil, errors.New("no supported network type available")
 	}
 
-	// Always resolve DNS for WARC archiving and caching
-	IP, _, err := d.archiveDNS(ctx, address)
-	if err != nil {
-		return nil, err
-	}
+	var dialAddr string
+	var IP net.IP
 
-	// Extract port from address for IP:port construction
-	_, port, err := net.SplitHostPort(address)
-	if err != nil {
-		return nil, fmt.Errorf("failed to extract port from address %s: %w", address, err)
-	}
+	if d.proxyDialer != nil && d.proxyNeedsHostname {
+		// Remote DNS proxy (socks5h, socks4a, http, https)
+		// Skip DNS archiving to avoid privacy leak and ensure accuracy.
+		// The proxy will handle DNS resolution on its end, and we don't want to:
+		// 1. Leak DNS queries to local DNS servers (defeats purpose of socks5h)
+		// 2. Archive potentially incorrect DNS results (local DNS may differ from proxy's DNS)
+		dialAddr = address
+	} else {
+		// Direct connection or local DNS proxy (socks5, socks4)
+		// Archive DNS and use resolved IP
+		IP, _, err = d.archiveDNS(ctx, address)
+		if err != nil {
+			return nil, err
+		}
 
-	// Determine the address to use for dialing
-	dialAddr := address // default: use hostname
-	if d.proxyDialer == nil || !d.proxyNeedsHostname {
-		// Use resolved IP for: direct connections OR proxies that support local DNS (socks5, socks4)
+		// Extract port from address for IP:port construction
+		var port string
+		_, port, err = net.SplitHostPort(address)
+		if err != nil {
+			return nil, fmt.Errorf("failed to extract port from address %s: %w", address, err)
+		}
+
 		dialAddr = net.JoinHostPort(IP.String(), port)
 	}
-	// else: proxy needs hostname (socks5h, http), keep dialAddr = address
 
 	if d.proxyDialer != nil {
 		conn, err = d.proxyDialer.DialContext(ctx, network, dialAddr)
@@ -291,25 +299,34 @@ func (d *customDialer) CustomDialTLSContext(ctx context.Context, network, addres
 		return nil, errors.New("no supported network type available")
 	}
 
-	// Always resolve DNS for WARC archiving and caching
-	IP, _, err := d.archiveDNS(ctx, address)
-	if err != nil {
-		return nil, err
-	}
+	var dialAddr string
+	var IP net.IP
+	var err error
 
-	// Extract port from address for IP:port construction
-	_, port, err := net.SplitHostPort(address)
-	if err != nil {
-		return nil, fmt.Errorf("failed to extract port from address %s: %w", address, err)
-	}
+	if d.proxyDialer != nil && d.proxyNeedsHostname {
+		// Remote DNS proxy (socks5h, socks4a, http, https)
+		// Skip DNS archiving to avoid privacy leak and ensure accuracy.
+		// The proxy will handle DNS resolution on its end, and we don't want to:
+		// 1. Leak DNS queries to local DNS servers (defeats purpose of socks5h)
+		// 2. Archive potentially incorrect DNS results (local DNS may differ from proxy's DNS)
+		dialAddr = address
+	} else {
+		// Direct connection or local DNS proxy (socks5, socks4)
+		// Archive DNS and use resolved IP
+		IP, _, err = d.archiveDNS(ctx, address)
+		if err != nil {
+			return nil, err
+		}
 
-	// Determine the address to use for dialing
-	dialAddr := address // default: use hostname
-	if d.proxyDialer == nil || !d.proxyNeedsHostname {
-		// Use resolved IP for: direct connections OR proxies that support local DNS (socks5, socks4)
+		// Extract port from address for IP:port construction
+		var port string
+		_, port, err = net.SplitHostPort(address)
+		if err != nil {
+			return nil, fmt.Errorf("failed to extract port from address %s: %w", address, err)
+		}
+
 		dialAddr = net.JoinHostPort(IP.String(), port)
 	}
-	// else: proxy needs hostname (socks5h, http), keep dialAddr = address
 
 	var plainConn net.Conn
 
