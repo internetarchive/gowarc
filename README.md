@@ -116,6 +116,32 @@ func main() {
 }
 ```
 
+### DNS Resolution and Proxy Behavior
+
+The library handles DNS resolution differently depending on the connection type:
+
+#### Direct Connections (No Proxy)
+- DNS is resolved locally using configured DNS servers
+- DNS queries and responses are archived in WARC files as `resource` records
+- Resolved IP addresses are cached with configurable TTL
+
+#### Local DNS Proxies (`socks5://`, `socks4://`)
+- DNS is resolved locally by gowarc
+- DNS records are archived to WARC files
+- Resolved IP addresses are sent to the proxy
+- Only one DNS query is made (no duplicate resolution)
+
+#### Remote DNS Proxies (`socks5h://`, `socks4a://`, `http://`, `https://`)
+- **DNS archiving is skipped** to prevent privacy leaks
+- Hostnames are sent directly to the proxy
+- The proxy handles DNS resolution on its end
+- Trade-offs:
+  - ✅ **Privacy**: No local DNS queries that could expose browsing activity
+  - ✅ **Accuracy**: WARC reflects the actual connection (no potential DNS mismatch)
+  - ⚠️ **No DNS WARC records**: DNS information is not archived for these connections
+
+**Important for Privacy**: When using `socks5h://` or other remote DNS proxies, your local DNS servers will not see any queries for the target domains, maintaining better privacy and anonymity.
+
 ## CLI Tools
 
 In addition to the Go library, gowarc provides several command-line utilities for working with WARC files:
