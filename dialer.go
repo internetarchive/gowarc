@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -61,15 +62,23 @@ func WithWrappedConnection(ctx context.Context, wrappedConnChan chan *CustomConn
 	return context.WithValue(ctx, ContextKeyWrappedConn, wrappedConnChan)
 }
 
+// dnsExchanger is an interface for DNS clients that can exchange messages
+type dnsExchanger interface {
+	ExchangeContext(ctx context.Context, m *dns.Msg, address string) (r *dns.Msg, rtt time.Duration, err error)
+}
+
 type customDialer struct {
-	proxyDialer proxy.ContextDialer
-	client      *CustomHTTPClient
-	DNSConfig   *dns.ClientConfig
-	DNSClient   *dns.Client
-	DNSRecords  *otter.Cache[string, net.IP]
+	proxyDialer        proxy.ContextDialer
+	proxyNeedsHostname bool // true if proxy requires hostname (socks5h, http), false if can use IP (socks5)
+	client             *CustomHTTPClient
+	DNSConfig          *dns.ClientConfig
+	DNSClient          dnsExchanger
+	DNSRecords         *otter.Cache[string, net.IP]
 	net.Dialer
-	disableIPv4 bool
-	disableIPv6 bool
+	disableIPv4        bool
+	disableIPv6        bool
+	dnsConcurrency     int
+	dnsRoundRobinIndex atomic.Uint32
 }
 
 var emptyPayloadDigests = []string{
@@ -79,13 +88,14 @@ var emptyPayloadDigests = []string{
 	"blake3:af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262",
 }
 
-func newCustomDialer(httpClient *CustomHTTPClient, proxyURL string, DialTimeout, DNSRecordsTTL, DNSResolutionTimeout time.Duration, DNSCacheSize int, DNSServers []string, disableIPv4, disableIPv6 bool) (d *customDialer, err error) {
+func newCustomDialer(httpClient *CustomHTTPClient, proxyURL string, DialTimeout, DNSRecordsTTL, DNSResolutionTimeout time.Duration, DNSCacheSize int, DNSServers []string, DNSConcurrency int, disableIPv4, disableIPv6 bool) (d *customDialer, err error) {
 	d = new(customDialer)
 
 	d.Timeout = DialTimeout
 	d.client = httpClient
 	d.disableIPv4 = disableIPv4
 	d.disableIPv6 = disableIPv6
+	d.dnsConcurrency = DNSConcurrency
 
 	DNScache, err := otter.MustBuilder[string, net.IP](DNSCacheSize).
 		// CollectStats(). // Uncomment this line to enable stats collection, can be useful later on
@@ -123,6 +133,12 @@ func newCustomDialer(httpClient *CustomHTTPClient, proxyURL string, DialTimeout,
 		}
 
 		d.proxyDialer = proxyDialer.(proxy.ContextDialer)
+
+		// Determine if this proxy requires hostname (remote DNS) or can use IP (local DNS)
+		// Proxies with remote DNS: socks5h, socks4a, http, https
+		// Proxies with local DNS: socks5, socks4
+		d.proxyNeedsHostname = u.Scheme == "socks5h" || u.Scheme == "socks4a" ||
+			u.Scheme == "http" || u.Scheme == "https"
 	}
 
 	return d, nil
@@ -219,26 +235,50 @@ func (d *customDialer) CustomDialContext(ctx context.Context, network, address s
 		return nil, errors.New("no supported network type available")
 	}
 
-	IP, _, err := d.archiveDNS(ctx, address)
-	if err != nil {
-		return nil, err
+	var dialAddr string
+	var IP net.IP
+
+	if d.proxyDialer != nil && d.proxyNeedsHostname {
+		// Remote DNS proxy (socks5h, socks4a, http, https)
+		// Skip DNS archiving to avoid privacy leak and ensure accuracy.
+		// The proxy will handle DNS resolution on its end, and we don't want to:
+		// 1. Leak DNS queries to local DNS servers (defeats purpose of socks5h)
+		// 2. Archive potentially incorrect DNS results (local DNS may differ from proxy's DNS)
+		dialAddr = address
+	} else {
+		// Direct connection or local DNS proxy (socks5, socks4)
+		// Archive DNS and use resolved IP
+		IP, _, err = d.archiveDNS(ctx, address)
+		if err != nil {
+			return nil, err
+		}
+
+		// Extract port from address for IP:port construction
+		var port string
+		_, port, err = net.SplitHostPort(address)
+		if err != nil {
+			return nil, fmt.Errorf("failed to extract port from address %s: %w", address, err)
+		}
+
+		dialAddr = net.JoinHostPort(IP.String(), port)
 	}
 
 	if d.proxyDialer != nil {
-		conn, err = d.proxyDialer.DialContext(ctx, network, address)
+		conn, err = d.proxyDialer.DialContext(ctx, network, dialAddr)
 	} else {
 		if d.client.randomLocalIP {
 			localAddr := getLocalAddr(network, IP)
 			if localAddr != nil {
-				if network == "tcp" || network == "tcp4" || network == "tcp6" {
+				switch network {
+				case "tcp", "tcp4", "tcp6":
 					d.LocalAddr = localAddr.(*net.TCPAddr)
-				} else if network == "udp" || network == "udp4" || network == "udp6" {
+				case "udp", "udp4", "udp6":
 					d.LocalAddr = localAddr.(*net.UDPAddr)
 				}
 			}
 		}
 
-		conn, err = d.DialContext(ctx, network, address)
+		conn, err = d.DialContext(ctx, network, dialAddr)
 	}
 
 	if err != nil {
@@ -259,28 +299,53 @@ func (d *customDialer) CustomDialTLSContext(ctx context.Context, network, addres
 		return nil, errors.New("no supported network type available")
 	}
 
-	IP, _, err := d.archiveDNS(ctx, address)
-	if err != nil {
-		return nil, err
+	var dialAddr string
+	var IP net.IP
+	var err error
+
+	if d.proxyDialer != nil && d.proxyNeedsHostname {
+		// Remote DNS proxy (socks5h, socks4a, http, https)
+		// Skip DNS archiving to avoid privacy leak and ensure accuracy.
+		// The proxy will handle DNS resolution on its end, and we don't want to:
+		// 1. Leak DNS queries to local DNS servers (defeats purpose of socks5h)
+		// 2. Archive potentially incorrect DNS results (local DNS may differ from proxy's DNS)
+		dialAddr = address
+	} else {
+		// Direct connection or local DNS proxy (socks5, socks4)
+		// Archive DNS and use resolved IP
+		IP, _, err = d.archiveDNS(ctx, address)
+		if err != nil {
+			return nil, err
+		}
+
+		// Extract port from address for IP:port construction
+		var port string
+		_, port, err = net.SplitHostPort(address)
+		if err != nil {
+			return nil, fmt.Errorf("failed to extract port from address %s: %w", address, err)
+		}
+
+		dialAddr = net.JoinHostPort(IP.String(), port)
 	}
 
 	var plainConn net.Conn
 
 	if d.proxyDialer != nil {
-		plainConn, err = d.proxyDialer.DialContext(ctx, network, address)
+		plainConn, err = d.proxyDialer.DialContext(ctx, network, dialAddr)
 	} else {
 		if d.client.randomLocalIP {
 			localAddr := getLocalAddr(network, IP)
 			if localAddr != nil {
-				if network == "tcp" || network == "tcp4" || network == "tcp6" {
+				switch network {
+				case "tcp", "tcp4", "tcp6":
 					d.LocalAddr = localAddr.(*net.TCPAddr)
-				} else if network == "udp" || network == "udp4" || network == "udp6" {
+				case "udp", "udp4", "udp6":
 					d.LocalAddr = localAddr.(*net.UDPAddr)
 				}
 			}
 		}
 
-		plainConn, err = d.DialContext(ctx, network, address)
+		plainConn, err = d.DialContext(ctx, network, dialAddr)
 	}
 
 	if err != nil {

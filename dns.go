@@ -9,8 +9,6 @@ import (
 	"github.com/miekg/dns"
 )
 
-const maxFallbackDNSServers = 3
-
 func (d *customDialer) archiveDNS(ctx context.Context, address string) (resolvedIP net.IP, cached bool, err error) {
 	// Get the address without the port if there is one
 	address, _, err = net.SplitHostPort(address)
@@ -29,39 +27,14 @@ func (d *customDialer) archiveDNS(ctx context.Context, address string) (resolved
 		return cachedIP, true, nil
 	}
 
-	var wg sync.WaitGroup
-	var ipv4, ipv6 net.IP
-	var errA, errAAAA error
-
 	if len(d.DNSConfig.Servers) == 0 {
 		return nil, false, fmt.Errorf("no DNS servers configured")
 	}
 
-	fallbackServers := min(maxFallbackDNSServers, len(d.DNSConfig.Servers)-1)
+	var ipv4, ipv6 net.IP
+	var errA, errAAAA error
 
-	for DNSServer := 0; DNSServer <= fallbackServers; DNSServer++ {
-		if !d.disableIPv4 {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				ipv4, errA = d.lookupIP(ctx, address, dns.TypeA, DNSServer)
-			}()
-		}
-
-		if !d.disableIPv6 {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				ipv6, errAAAA = d.lookupIP(ctx, address, dns.TypeAAAA, DNSServer)
-			}()
-		}
-
-		wg.Wait()
-
-		if errA == nil || errAAAA == nil {
-			break
-		}
-	}
+	ipv4, ipv6, errA, errAAAA = d.concurrentDNSLookup(ctx, address, len(d.DNSConfig.Servers))
 	if errA != nil && errAAAA != nil {
 		return nil, false, fmt.Errorf("failed to resolve DNS: A error: %v, AAAA error: %v", errA, errAAAA)
 	}
@@ -80,6 +53,132 @@ func (d *customDialer) archiveDNS(ctx context.Context, address string) (resolved
 	}
 
 	return nil, false, fmt.Errorf("no suitable IP address found for %s", address)
+}
+
+// concurrentDNSLookup tries DNS servers with configurable concurrency
+// - dnsConcurrency <= 1: sequential (one server at a time)
+// - dnsConcurrency > 1: that many servers concurrently
+// - dnsConcurrency == -1: all servers at once (unlimited)
+// Implements early cancellation: stops querying once results are found
+func (d *customDialer) concurrentDNSLookup(ctx context.Context, address string, maxServers int) (ipv4, ipv6 net.IP, errA, errAAAA error) {
+	type result struct {
+		ip         net.IP
+		err        error
+		recordType uint16
+	}
+
+	// Determine effective concurrency
+	concurrency := d.dnsConcurrency
+	if concurrency == -1 {
+		concurrency = maxServers // Unlimited = all servers
+	} else if concurrency <= 0 {
+		concurrency = 1 // Default to sequential
+	}
+
+	// Create cancellable context for early termination
+	workerCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	resultChan := make(chan result, maxServers*2)
+	serverChan := make(chan int, maxServers)
+	var wg sync.WaitGroup
+
+	// Fill server queue with round-robin starting index
+	// Atomically increment and get the starting position
+	startIdx := int(d.dnsRoundRobinIndex.Add(1)-1) % maxServers
+	for i := range maxServers {
+		serverIdx := (startIdx + i) % maxServers
+		serverChan <- serverIdx
+	}
+	close(serverChan)
+
+	// Helper to check if we have all needed results
+	haveAllResults := func() bool {
+		if !d.disableIPv4 && ipv4 == nil {
+			return false
+		}
+		if !d.disableIPv6 && ipv6 == nil {
+			return false
+		}
+		return true
+	}
+
+	// Launch worker goroutines (limited by concurrency)
+	for i := 0; i < concurrency && i < maxServers; i++ {
+		wg.Go(func() {
+			for serverIdx := range serverChan {
+				// Check if context was cancelled before starting queries
+				select {
+				case <-workerCtx.Done():
+					return
+				default:
+				}
+
+				// Query both A and AAAA for this server
+				if !d.disableIPv4 {
+					ip, err := d.lookupIP(workerCtx, address, dns.TypeA, serverIdx)
+					select {
+					case resultChan <- result{ip: ip, err: err, recordType: dns.TypeA}:
+					case <-workerCtx.Done():
+						return
+					}
+				}
+				if !d.disableIPv6 {
+					ip, err := d.lookupIP(workerCtx, address, dns.TypeAAAA, serverIdx)
+					select {
+					case resultChan <- result{ip: ip, err: err, recordType: dns.TypeAAAA}:
+					case <-workerCtx.Done():
+						return
+					}
+				}
+			}
+		})
+	}
+
+	// Close result channel when all workers complete
+	go func() {
+		wg.Wait()
+		close(resultChan)
+	}()
+
+	// Collect results with early termination
+	var ipv4Errors, ipv6Errors []error
+	for res := range resultChan {
+		if res.err == nil {
+			if res.recordType == dns.TypeA && ipv4 == nil {
+				ipv4 = res.ip
+			} else if res.recordType == dns.TypeAAAA && ipv6 == nil {
+				ipv6 = res.ip
+			}
+
+			// Early termination: if we have all results, cancel workers
+			if haveAllResults() {
+				cancel()
+				// Drain remaining results to prevent worker blocking
+				go func() {
+					for range resultChan {
+					}
+				}()
+				break
+			}
+		} else {
+			if res.recordType == dns.TypeA {
+				ipv4Errors = append(ipv4Errors, res.err)
+			} else {
+				ipv6Errors = append(ipv6Errors, res.err)
+			}
+		}
+	}
+
+	// Set errors only if all queries of that type failed
+	if ipv4 == nil && len(ipv4Errors) > 0 {
+		errA = ipv4Errors[0]
+	}
+	if ipv6 == nil && len(ipv6Errors) > 0 {
+		errAAAA = ipv6Errors[0]
+	}
+
+	return ipv4, ipv6, errA, errAAAA
 }
 
 func (d *customDialer) lookupIP(ctx context.Context, address string, recordType uint16, DNSServer int) (net.IP, error) {
