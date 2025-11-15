@@ -1915,7 +1915,7 @@ func TestHTTPClientPOSTWithTextPayload(t *testing.T) {
 
 	// Check the WARC records contain the POST request and response
 	for _, path := range files {
-		testFileHash(t, path)
+		testFileSingleHashCheck(t, path, "sha1:RFV2ZU2BHITF3PW7BSPBQE65GFZS7F5G", []string{"154"}, 1, server.URL+"/")
 
 		file, err := os.Open(path)
 		if err != nil {
@@ -1929,7 +1929,6 @@ func TestHTTPClientPOSTWithTextPayload(t *testing.T) {
 		}
 
 		foundRequest := false
-		foundResponse := false
 
 		for {
 			record, err := reader.ReadRecord()
@@ -1958,19 +1957,11 @@ func TestHTTPClientPOSTWithTextPayload(t *testing.T) {
 				}
 			}
 
-			// Check for response record
-			if record.Header.Get("WARC-Type") == "response" {
-				foundResponse = true
-			}
-
 			record.Content.Close()
 		}
 
 		if !foundRequest {
 			t.Error("No request record found in WARC file")
-		}
-		if !foundResponse {
-			t.Error("No response record found in WARC file")
 		}
 	}
 }
@@ -2047,7 +2038,7 @@ func TestHTTPClientPOSTWithJSONPayload(t *testing.T) {
 
 	// Check the WARC records contain the POST request with JSON body
 	for _, path := range files {
-		testFileHash(t, path)
+		testFileSingleHashCheck(t, path, "sha1:IAKLOIOTQX2W7PAAWWA2TELLU5HCKO3V", []string{"191"}, 1, server.URL+"/")
 
 		file, err := os.Open(path)
 		if err != nil {
@@ -2168,7 +2159,7 @@ func TestHTTPClientPOSTWithFormData(t *testing.T) {
 
 	// Check the WARC records contain the POST request with form data
 	for _, path := range files {
-		testFileHash(t, path)
+		testFileSingleHashCheck(t, path, "sha1:DGXE2J6TLUT3GYLTA2LNA4NQMMPF5SWX", []string{"175"}, 1, server.URL+"/")
 
 		file, err := os.Open(path)
 		if err != nil {
