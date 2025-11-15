@@ -30,11 +30,11 @@ func TestSmokeWARCFormatRegression(t *testing.T) {
 	// These values were extracted from a known-good WARC file and serve as
 	// a snapshot of correct format behavior.
 	expectedRecords := []struct {
-		warcType      string
-		contentLength int64
-		blockDigest   string
-		payloadDigest string // only for response records
-		targetURI     string // only for response records
+		warcType        string
+		contentLength   int64
+		blockDigest     string
+		payloadDigest   string // only for response records
+		targetURI       string // only for response records
 	}{
 		{
 			warcType:      "warcinfo",
