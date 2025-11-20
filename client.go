@@ -13,9 +13,60 @@ type Error struct {
 	Func string
 }
 
+// ProxyNetwork defines the network layer (IPv4/IPv6) a proxy can support
+type ProxyNetwork int
+
+const (
+	// ProxyNetworkAny means the proxy can be used for both IPv4 and IPv6 connections
+	ProxyNetworkAny ProxyNetwork = iota
+	// ProxyNetworkIPv4 means the proxy should only be used for IPv4 connections
+	ProxyNetworkIPv4
+	// ProxyNetworkIPv6 means the proxy should only be used for IPv6 connections
+	ProxyNetworkIPv6
+)
+
+// ProxyType defines the infrastructure type of a proxy
+type ProxyType int
+
+const (
+	// ProxyTypeAny means the proxy can be used for any type of request
+	ProxyTypeAny ProxyType = iota
+	// ProxyTypeMobile means the proxy uses mobile network infrastructure
+	ProxyTypeMobile
+	// ProxyTypeResidential means the proxy uses residential IP addresses
+	ProxyTypeResidential
+	// ProxyTypeDatacenter means the proxy uses datacenter infrastructure
+	ProxyTypeDatacenter
+)
+
+// ProxyConfig defines the configuration for a single proxy
+type ProxyConfig struct {
+	// URL is the proxy URL (e.g., "socks5://proxy.example.com:1080")
+	URL string
+	// Network specifies if this proxy supports IPv4, IPv6, or both
+	Network ProxyNetwork
+	// Type specifies the infrastructure type (Mobile, Residential, Datacenter, or Any)
+	Type ProxyType
+	// AllowedDomains is a list of glob patterns for domains this proxy should handle
+	// Examples: "*.example.com", "api.*.org"
+	// If empty, the proxy can be used for any domain
+	AllowedDomains []string
+}
+
+// ProxyStats holds statistics for a single proxy
+type ProxyStats struct {
+	// RequestCount is the total number of requests made through this proxy
+	RequestCount atomic.Int64
+	// ErrorCount is the number of failed requests/connections through this proxy
+	ErrorCount atomic.Int64
+	// LastUsed is when this proxy was last selected (Unix nanoseconds)
+	LastUsed atomic.Int64
+}
+
 type HTTPClientSettings struct {
 	RotatorSettings       *RotatorSettings
-	Proxy                 string
+	Proxies               []ProxyConfig
+	AllowDirectFallback   bool
 	TempDir               string
 	DiscardHook           DiscardHook
 	DNSServers            []string
@@ -73,6 +124,9 @@ type CustomHTTPClient struct {
 	CDXDedupeTotal          *atomic.Int64
 	DoppelgangerDedupeTotal *atomic.Int64
 	LocalDedupeTotal        *atomic.Int64
+
+	// ProxyStats holds per-proxy statistics, keyed by proxy URL
+	ProxyStats map[string]*ProxyStats
 }
 
 func (c *CustomHTTPClient) Close() error {
@@ -101,6 +155,11 @@ func (c *CustomHTTPClient) Close() error {
 	c.closeDNSCache()
 
 	return nil
+}
+
+// GetProxyStats returns a copy of the per-proxy statistics map
+func (c *CustomHTTPClient) GetProxyStats() map[string]*ProxyStats {
+	return c.ProxyStats
 }
 
 func NewWARCWritingHTTPClient(HTTPClientSettings HTTPClientSettings) (httpClient *CustomHTTPClient, err error) {
@@ -216,7 +275,7 @@ func NewWARCWritingHTTPClient(HTTPClientSettings HTTPClientSettings) (httpClient
 	httpClient.ConnReadDeadline = HTTPClientSettings.ConnReadDeadline
 
 	// Configure custom dialer / transport
-	customDialer, err := newCustomDialer(httpClient, HTTPClientSettings.Proxy, HTTPClientSettings.DialTimeout, HTTPClientSettings.DNSRecordsTTL, HTTPClientSettings.DNSResolutionTimeout, HTTPClientSettings.DNSCacheSize, HTTPClientSettings.DNSServers, HTTPClientSettings.DNSConcurrency, HTTPClientSettings.DisableIPv4, HTTPClientSettings.DisableIPv6)
+	customDialer, err := newCustomDialer(httpClient, HTTPClientSettings.Proxies, HTTPClientSettings.AllowDirectFallback, HTTPClientSettings.DialTimeout, HTTPClientSettings.DNSRecordsTTL, HTTPClientSettings.DNSResolutionTimeout, HTTPClientSettings.DNSCacheSize, HTTPClientSettings.DNSServers, HTTPClientSettings.DNSConcurrency, HTTPClientSettings.DisableIPv4, HTTPClientSettings.DisableIPv6)
 	if err != nil {
 		return nil, err
 	}

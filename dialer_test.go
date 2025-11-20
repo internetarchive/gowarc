@@ -2,6 +2,7 @@ package warc
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"strings"
 	"testing"
@@ -164,4 +165,333 @@ func TestFindEndOfHeadersOffset(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestProxySelection(t *testing.T) {
+	t.Run("NoProxies", func(t *testing.T) {
+		d := &customDialer{
+			proxyDialers: []proxyDialerInfo{},
+		}
+		proxy, err := d.selectProxy(context.Background(), "tcp", "example.com:80")
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+		if proxy != nil {
+			t.Error("expected nil proxy when no proxies configured")
+		}
+	})
+
+	t.Run("IPv4ProxyWithIPv4Network", func(t *testing.T) {
+		d := &customDialer{
+			proxyDialers: []proxyDialerInfo{
+				{
+					proxyNetwork: ProxyNetworkIPv4,
+					proxyType:    ProxyTypeAny,
+					url:          "socks5://ipv4-proxy:1080",
+				},
+			},
+		}
+		proxy, err := d.selectProxy(context.Background(), "tcp4", "example.com:80")
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+		if proxy == nil {
+			t.Error("expected proxy for IPv4 network with IPv4 proxy")
+		}
+		if proxy != nil && proxy.url != "socks5://ipv4-proxy:1080" {
+			t.Errorf("expected socks5://ipv4-proxy:1080, got %s", proxy.url)
+		}
+	})
+
+	t.Run("IPv4ProxyWithIPv6Network", func(t *testing.T) {
+		d := &customDialer{
+			proxyDialers: []proxyDialerInfo{
+				{
+					proxyNetwork: ProxyNetworkIPv4,
+					proxyType:    ProxyTypeAny,
+					url:          "socks5://ipv4-proxy:1080",
+				},
+			},
+			allowDirectFallback: true,
+		}
+		proxy, err := d.selectProxy(context.Background(), "tcp6", "example.com:80")
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+		if proxy != nil {
+			t.Error("expected nil proxy for IPv6 network with IPv4 proxy")
+		}
+	})
+
+	t.Run("IPv6ProxyWithIPv6Network", func(t *testing.T) {
+		d := &customDialer{
+			proxyDialers: []proxyDialerInfo{
+				{
+					proxyNetwork: ProxyNetworkIPv6,
+					proxyType:    ProxyTypeAny,
+					url:          "socks5://ipv6-proxy:1080",
+				},
+			},
+		}
+		proxy, err := d.selectProxy(context.Background(), "tcp6", "example.com:80")
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+		if proxy == nil {
+			t.Error("expected proxy for IPv6 network with IPv6 proxy")
+		}
+	})
+
+	t.Run("DomainFiltering", func(t *testing.T) {
+		d := &customDialer{
+			proxyDialers: []proxyDialerInfo{
+				{
+					proxyNetwork:   ProxyNetworkAny,
+					proxyType:      ProxyTypeAny,
+					allowedDomains: []string{"*.example.com"},
+					url:            "socks5://domain-proxy:1080",
+				},
+			},
+		}
+
+		// Should match subdomain
+		proxy, err := d.selectProxy(context.Background(), "tcp", "api.example.com:443")
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+		if proxy == nil {
+			t.Error("expected proxy for matching domain")
+		}
+
+		// Should match base domain
+		d.allowDirectFallback = true
+		proxy, err = d.selectProxy(context.Background(), "tcp", "example.com:443")
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+		if proxy == nil {
+			t.Error("expected proxy for base domain")
+		}
+
+		// Should not match different domain
+		proxy, err = d.selectProxy(context.Background(), "tcp", "other.com:443")
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+		if proxy != nil {
+			t.Error("expected nil proxy for non-matching domain")
+		}
+	})
+
+	t.Run("ProxyTypeSelection", func(t *testing.T) {
+		d := &customDialer{
+			proxyDialers: []proxyDialerInfo{
+				{
+					proxyNetwork: ProxyNetworkAny,
+					proxyType:    ProxyTypeAny,
+					url:          "socks5://any-proxy:1080",
+				},
+				{
+					proxyNetwork: ProxyNetworkAny,
+					proxyType:    ProxyTypeMobile,
+					url:          "socks5://mobile-proxy:1080",
+				},
+				{
+					proxyNetwork: ProxyNetworkAny,
+					proxyType:    ProxyTypeResidential,
+					url:          "socks5://residential-proxy:1080",
+				},
+			},
+		}
+
+		// Without proxy type context, should use ProxyTypeAny proxy
+		proxy, err := d.selectProxy(context.Background(), "tcp", "example.com:80")
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+		if proxy == nil || proxy.url != "socks5://any-proxy:1080" {
+			t.Error("expected any-proxy without proxy type context")
+		}
+
+		// With mobile proxy type context, should use mobile proxy
+		ctx := WithProxyType(context.Background(), ProxyTypeMobile)
+		proxy, err = d.selectProxy(ctx, "tcp", "example.com:80")
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+		if proxy == nil || proxy.url != "socks5://mobile-proxy:1080" {
+			t.Error("expected mobile-proxy with mobile proxy type context")
+		}
+
+		// With residential proxy type context, should use residential proxy
+		ctx = WithProxyType(context.Background(), ProxyTypeResidential)
+		proxy, err = d.selectProxy(ctx, "tcp", "example.com:80")
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+		if proxy == nil || proxy.url != "socks5://residential-proxy:1080" {
+			t.Error("expected residential-proxy with residential proxy type context")
+		}
+	})
+
+	t.Run("RoundRobinSelection", func(t *testing.T) {
+		d := &customDialer{
+			proxyDialers: []proxyDialerInfo{
+				{
+					proxyNetwork: ProxyNetworkAny,
+					proxyType:    ProxyTypeAny,
+					url:          "socks5://proxy1:1080",
+				},
+				{
+					proxyNetwork: ProxyNetworkAny,
+					proxyType:    ProxyTypeAny,
+					url:          "socks5://proxy2:1080",
+				},
+				{
+					proxyNetwork: ProxyNetworkAny,
+					proxyType:    ProxyTypeAny,
+					url:          "socks5://proxy3:1080",
+				},
+			},
+		}
+
+		// Expected order for 3 complete cycles (9 selections)
+		expectedOrder := []string{
+			"socks5://proxy1:1080",
+			"socks5://proxy2:1080",
+			"socks5://proxy3:1080",
+			"socks5://proxy1:1080",
+			"socks5://proxy2:1080",
+			"socks5://proxy3:1080",
+			"socks5://proxy1:1080",
+			"socks5://proxy2:1080",
+			"socks5://proxy3:1080",
+		}
+
+		// Select proxies 9 times and verify sequential round-robin order
+		for i := 0; i < 9; i++ {
+			proxy, err := d.selectProxy(context.Background(), "tcp", "example.com:80")
+			if err != nil {
+				t.Errorf("iteration %d: unexpected error: %v", i, err)
+			}
+			if proxy == nil {
+				t.Errorf("iteration %d: expected proxy, got nil", i)
+			} else if proxy.url != expectedOrder[i] {
+				t.Errorf("iteration %d: expected %s, got %s", i, expectedOrder[i], proxy.url)
+			}
+		}
+	})
+
+	t.Run("NoEligibleProxiesWithFallback", func(t *testing.T) {
+		d := &customDialer{
+			proxyDialers: []proxyDialerInfo{
+				{
+					proxyNetwork: ProxyNetworkIPv6,
+					proxyType:    ProxyTypeAny,
+					url:          "socks5://ipv6-proxy:1080",
+				},
+			},
+			allowDirectFallback: true,
+		}
+
+		// IPv4 network with IPv6 proxy should use direct connection
+		proxy, err := d.selectProxy(context.Background(), "tcp4", "example.com:80")
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+		if proxy != nil {
+			t.Error("expected nil proxy with direct fallback")
+		}
+	})
+
+	t.Run("NoEligibleProxiesWithoutFallback", func(t *testing.T) {
+		d := &customDialer{
+			proxyDialers: []proxyDialerInfo{
+				{
+					proxyNetwork: ProxyNetworkIPv6,
+					proxyType:    ProxyTypeAny,
+					url:          "socks5://ipv6-proxy:1080",
+				},
+			},
+			allowDirectFallback: false,
+		}
+
+		// IPv4 network with IPv6 proxy and no fallback should error
+		proxy, err := d.selectProxy(context.Background(), "tcp4", "example.com:80")
+		if err == nil {
+			t.Error("expected error when no eligible proxies and no fallback")
+		}
+		if proxy != nil {
+			t.Error("expected nil proxy")
+		}
+	})
+
+	t.Run("ComplexFiltering", func(t *testing.T) {
+		d := &customDialer{
+			proxyDialers: []proxyDialerInfo{
+				{
+					proxyNetwork:   ProxyNetworkIPv4,
+					proxyType:      ProxyTypeAny,
+					allowedDomains: []string{"*.api.example.com"},
+					url:            "socks5://api-ipv4-proxy:1080",
+				},
+				{
+					proxyNetwork:   ProxyNetworkIPv6,
+					proxyType:      ProxyTypeAny,
+					allowedDomains: []string{"*.media.example.com"},
+					url:            "socks5://media-ipv6-proxy:1080",
+				},
+				{
+					proxyNetwork: ProxyNetworkAny,
+					proxyType:    ProxyTypeMobile,
+					url:          "socks5://mobile-proxy:1080",
+				},
+				{
+					proxyNetwork: ProxyNetworkAny,
+					proxyType:    ProxyTypeResidential,
+					url:          "socks5://residential-proxy:1080",
+				},
+			},
+		}
+
+		// Test IPv4 API domain
+		proxy, err := d.selectProxy(context.Background(), "tcp4", "service.api.example.com:443")
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+		if proxy == nil || proxy.url != "socks5://api-ipv4-proxy:1080" {
+			t.Error("expected api-ipv4-proxy for IPv4 API domain")
+		}
+
+		// Test IPv6 media domain
+		proxy, err = d.selectProxy(context.Background(), "tcp6", "cdn.media.example.com:443")
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+		if proxy == nil {
+			t.Error("expected proxy for IPv6 media domain, got nil")
+		} else if proxy.url != "socks5://media-ipv6-proxy:1080" {
+			t.Errorf("expected media-ipv6-proxy for IPv6 media domain, got %s", proxy.url)
+		}
+
+		// Test mobile proxy type context
+		ctx := WithProxyType(context.Background(), ProxyTypeMobile)
+		proxy, err = d.selectProxy(ctx, "tcp", "example.com:80")
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+		if proxy == nil || proxy.url != "socks5://mobile-proxy:1080" {
+			t.Error("expected mobile-proxy with mobile proxy type context")
+		}
+
+		// Test residential proxy type context
+		ctx = WithProxyType(context.Background(), ProxyTypeResidential)
+		proxy, err = d.selectProxy(ctx, "tcp", "example.com:80")
+		if err != nil {
+			t.Errorf("unexpected error: %v", err)
+		}
+		if proxy == nil || proxy.url != "socks5://residential-proxy:1080" {
+			t.Error("expected residential-proxy with residential proxy type context")
+		}
+	})
 }
