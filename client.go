@@ -17,8 +17,10 @@ type Error struct {
 type ProxyNetwork int
 
 const (
+	// ProxyNetworkUnset is the zero value and must not be used - forces explicit selection
+	ProxyNetworkUnset ProxyNetwork = iota
 	// ProxyNetworkAny means the proxy can be used for both IPv4 and IPv6 connections
-	ProxyNetworkAny ProxyNetwork = iota
+	ProxyNetworkAny
 	// ProxyNetworkIPv4 means the proxy should only be used for IPv4 connections
 	ProxyNetworkIPv4
 	// ProxyNetworkIPv6 means the proxy should only be used for IPv6 connections

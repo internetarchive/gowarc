@@ -162,6 +162,11 @@ func newCustomDialer(httpClient *CustomHTTPClient, proxies []ProxyConfig, allowD
 			continue
 		}
 
+		// Validate that Network is explicitly set
+		if proxyConfig.Network == ProxyNetworkUnset {
+			return nil, fmt.Errorf("proxy %s: Network must be explicitly set to ProxyNetworkAny, ProxyNetworkIPv4, or ProxyNetworkIPv6", proxyConfig.URL)
+		}
+
 		u, err := url.Parse(proxyConfig.URL)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse proxy URL %s: %w", proxyConfig.URL, err)
