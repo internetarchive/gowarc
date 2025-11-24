@@ -6,6 +6,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestGetNetworkType(t *testing.T) {
@@ -494,4 +495,372 @@ func TestProxySelection(t *testing.T) {
 			t.Error("expected residential-proxy with residential proxy type context")
 		}
 	})
+}
+
+// TestProxyStatsMetricNames tests the proxy metric name generation functions
+func TestProxyStatsMetricNames(t *testing.T) {
+	tests := []struct {
+		name           string
+		proxyName      string
+		expectedMetric string
+		expectedHelp   string
+		metricFunc     func(string) (string, string)
+	}{
+		{
+			name:           "requests metric for simple proxy",
+			proxyName:      "example_com_8080",
+			expectedMetric: "proxy_example_com_8080_requests_total",
+			expectedHelp:   "Total number of requests gone through this proxy",
+			metricFunc:     makeProxyRequestsMetricName,
+		},
+		{
+			name:           "errors metric for simple proxy",
+			proxyName:      "example_com_8080",
+			expectedMetric: "proxy_example_com_8080_errors_total",
+			expectedHelp:   "Total number of errors occurred with this proxy",
+			metricFunc:     makeProxyErrorsMetricName,
+		},
+		{
+			name:           "last used metric for simple proxy",
+			proxyName:      "example_com_8080",
+			expectedMetric: "proxy_example_com_8080_last_used_nanoseconds",
+			expectedHelp:   "Last time this proxy was used in seconds (unix timestamp ns)",
+			metricFunc:     makeProxyLastUsedMetricName,
+		},
+		{
+			name:           "requests metric for IPv4 proxy",
+			proxyName:      "192_168_1_1_3128",
+			expectedMetric: "proxy_192_168_1_1_3128_requests_total",
+			expectedHelp:   "Total number of requests gone through this proxy",
+			metricFunc:     makeProxyRequestsMetricName,
+		},
+		{
+			name:           "errors metric for IPv6 proxy",
+			proxyName:      "2001_db8__1_8080",
+			expectedMetric: "proxy_2001_db8__1_8080_errors_total",
+			expectedHelp:   "Total number of errors occurred with this proxy",
+			metricFunc:     makeProxyErrorsMetricName,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			metric, help := tt.metricFunc(tt.proxyName)
+			if metric != tt.expectedMetric {
+				t.Errorf("Expected metric name %s, got %s", tt.expectedMetric, metric)
+			}
+			if help != tt.expectedHelp {
+				t.Errorf("Expected help text %s, got %s", tt.expectedHelp, help)
+			}
+		})
+	}
+}
+
+// TestProxyStatsRequestCount tests that proxy request counts are incremented correctly
+func TestProxyStatsRequestCount(t *testing.T) {
+	registry := newLocalRegistry()
+
+	d := &customDialer{
+		proxyDialers: []proxyDialerInfo{
+			{
+				proxyNetwork: ProxyNetworkAny,
+				proxyType:    ProxyTypeAny,
+				url:          "socks5://proxy1:1080",
+				name:         "proxy1_1080",
+				stats:        registry,
+			},
+			{
+				proxyNetwork: ProxyNetworkAny,
+				proxyType:    ProxyTypeAny,
+				url:          "socks5://proxy2:1080",
+				name:         "proxy2_1080",
+				stats:        registry,
+			},
+		},
+	}
+
+	// Select proxies multiple times and verify request counts
+	for i := 0; i < 5; i++ {
+		proxy, err := d.selectProxy(context.Background(), "tcp", "example.com:80")
+		if err != nil {
+			t.Fatalf("iteration %d: unexpected error: %v", i, err)
+		}
+		if proxy == nil {
+			t.Fatalf("iteration %d: expected proxy, got nil", i)
+		}
+	}
+
+	// Verify both proxies were used (round-robin)
+	// With 5 selections: proxy1 should be used 3 times, proxy2 should be used 2 times
+	proxy1RequestsName, _ := makeProxyRequestsMetricName("proxy1_1080")
+	proxy2RequestsName, _ := makeProxyRequestsMetricName("proxy2_1080")
+
+	proxy1Counter := registry.RegisterCounter(proxy1RequestsName, "")
+	proxy2Counter := registry.RegisterCounter(proxy2RequestsName, "")
+
+	if proxy1Counter.Get() != 3 {
+		t.Errorf("Expected proxy1 request count 3, got %d", proxy1Counter.Get())
+	}
+	if proxy2Counter.Get() != 2 {
+		t.Errorf("Expected proxy2 request count 2, got %d", proxy2Counter.Get())
+	}
+}
+
+// TestProxyStatsLastUsed tests that proxy last used timestamps are updated
+func TestProxyStatsLastUsed(t *testing.T) {
+	registry := newLocalRegistry()
+
+	d := &customDialer{
+		proxyDialers: []proxyDialerInfo{
+			{
+				proxyNetwork: ProxyNetworkAny,
+				proxyType:    ProxyTypeAny,
+				url:          "socks5://proxy:1080",
+				name:         "proxy_1080",
+				stats:        registry,
+			},
+		},
+	}
+
+	// Record time before selection
+	timeBefore := time.Now().UnixNano()
+
+	// Select proxy
+	proxy, err := d.selectProxy(context.Background(), "tcp", "example.com:80")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if proxy == nil {
+		t.Fatal("expected proxy, got nil")
+	}
+
+	// Record time after selection
+	timeAfter := time.Now().UnixNano()
+
+	// Verify last used timestamp is within expected range
+	lastUsedName, _ := makeProxyLastUsedMetricName("proxy_1080")
+	lastUsedGauge := registry.RegisterGauge(lastUsedName, "")
+	lastUsed := lastUsedGauge.Get()
+
+	if lastUsed < timeBefore || lastUsed > timeAfter {
+		t.Errorf("Expected last used timestamp between %d and %d, got %d", timeBefore, timeAfter, lastUsed)
+	}
+
+	// Wait a bit and select again
+	time.Sleep(10 * time.Millisecond)
+	timeBeforeSecond := time.Now().UnixNano()
+
+	proxy, err = d.selectProxy(context.Background(), "tcp", "example.com:80")
+	if err != nil {
+		t.Fatalf("unexpected error on second selection: %v", err)
+	}
+	if proxy == nil {
+		t.Fatal("expected proxy on second selection, got nil")
+	}
+
+	timeAfterSecond := time.Now().UnixNano()
+
+	// Verify last used timestamp was updated
+	lastUsedSecond := lastUsedGauge.Get()
+	if lastUsedSecond < timeBeforeSecond || lastUsedSecond > timeAfterSecond {
+		t.Errorf("Expected updated last used timestamp between %d and %d, got %d", timeBeforeSecond, timeAfterSecond, lastUsedSecond)
+	}
+	if lastUsedSecond <= lastUsed {
+		t.Errorf("Expected last used timestamp to be updated, but %d <= %d", lastUsedSecond, lastUsed)
+	}
+}
+
+// TestProxyStatsWithNilRegistry tests that proxy selection works when stats registry is nil
+func TestProxyStatsWithNilRegistry(t *testing.T) {
+	d := &customDialer{
+		proxyDialers: []proxyDialerInfo{
+			{
+				proxyNetwork: ProxyNetworkAny,
+				proxyType:    ProxyTypeAny,
+				url:          "socks5://proxy:1080",
+				name:         "proxy_1080",
+				stats:        nil, // No stats registry
+			},
+		},
+	}
+
+	// Should not panic when stats is nil
+	proxy, err := d.selectProxy(context.Background(), "tcp", "example.com:80")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if proxy == nil {
+		t.Fatal("expected proxy, got nil")
+	}
+}
+
+// TestProxyStatsMultipleProxiesRoundRobin tests that stats are correctly tracked across multiple proxies in round-robin
+func TestProxyStatsMultipleProxiesRoundRobin(t *testing.T) {
+	registry := newLocalRegistry()
+
+	d := &customDialer{
+		proxyDialers: []proxyDialerInfo{
+			{
+				proxyNetwork: ProxyNetworkAny,
+				proxyType:    ProxyTypeAny,
+				url:          "socks5://proxy1:1080",
+				name:         "proxy1",
+				stats:        registry,
+			},
+			{
+				proxyNetwork: ProxyNetworkAny,
+				proxyType:    ProxyTypeAny,
+				url:          "socks5://proxy2:1080",
+				name:         "proxy2",
+				stats:        registry,
+			},
+			{
+				proxyNetwork: ProxyNetworkAny,
+				proxyType:    ProxyTypeAny,
+				url:          "socks5://proxy3:1080",
+				name:         "proxy3",
+				stats:        registry,
+			},
+		},
+	}
+
+	// Select proxies 12 times (4 complete round-robin cycles)
+	for i := 0; i < 12; i++ {
+		proxy, err := d.selectProxy(context.Background(), "tcp", "example.com:80")
+		if err != nil {
+			t.Fatalf("iteration %d: unexpected error: %v", i, err)
+		}
+		if proxy == nil {
+			t.Fatalf("iteration %d: expected proxy, got nil", i)
+		}
+	}
+
+	// Verify each proxy was used exactly 4 times
+	for i := 1; i <= 3; i++ {
+		proxyName := "proxy" + string(rune('0'+i))
+		requestsName, _ := makeProxyRequestsMetricName(proxyName)
+		counter := registry.RegisterCounter(requestsName, "")
+
+		expectedCount := int64(4)
+		if counter.Get() != expectedCount {
+			t.Errorf("Expected %s request count %d, got %d", proxyName, expectedCount, counter.Get())
+		}
+	}
+}
+
+// TestProxyStatsWithDomainFiltering tests that stats are only updated for eligible proxies
+func TestProxyStatsWithDomainFiltering(t *testing.T) {
+	registry := newLocalRegistry()
+
+	d := &customDialer{
+		proxyDialers: []proxyDialerInfo{
+			{
+				proxyNetwork:   ProxyNetworkAny,
+				proxyType:      ProxyTypeAny,
+				allowedDomains: []string{"*.example.com"},
+				url:            "socks5://example-proxy:1080",
+				name:           "example_proxy",
+				stats:          registry,
+			},
+			{
+				proxyNetwork:   ProxyNetworkAny,
+				proxyType:      ProxyTypeAny,
+				allowedDomains: []string{"*.test.com"},
+				url:            "socks5://test-proxy:1080",
+				name:           "test_proxy",
+				stats:          registry,
+			},
+		},
+		allowDirectFallback: true,
+	}
+
+	// Select proxy for example.com domain - should use example-proxy
+	proxy, err := d.selectProxy(context.Background(), "tcp", "api.example.com:443")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if proxy == nil || proxy.name != "example_proxy" {
+		t.Fatal("expected example-proxy")
+	}
+
+	// Select proxy for test.com domain - should use test-proxy
+	proxy, err = d.selectProxy(context.Background(), "tcp", "api.test.com:443")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if proxy == nil || proxy.name != "test_proxy" {
+		t.Fatal("expected test-proxy")
+	}
+
+	// Verify stats
+	exampleRequestsName, _ := makeProxyRequestsMetricName("example_proxy")
+	testRequestsName, _ := makeProxyRequestsMetricName("test_proxy")
+
+	exampleCounter := registry.RegisterCounter(exampleRequestsName, "")
+	testCounter := registry.RegisterCounter(testRequestsName, "")
+
+	if exampleCounter.Get() != 1 {
+		t.Errorf("Expected example_proxy request count 1, got %d", exampleCounter.Get())
+	}
+	if testCounter.Get() != 1 {
+		t.Errorf("Expected test_proxy request count 1, got %d", testCounter.Get())
+	}
+}
+
+// TestProxyStatsProxyTypeFiltering tests that stats work correctly with proxy type filtering
+func TestProxyStatsProxyTypeFiltering(t *testing.T) {
+	registry := newLocalRegistry()
+
+	d := &customDialer{
+		proxyDialers: []proxyDialerInfo{
+			{
+				proxyNetwork: ProxyNetworkAny,
+				proxyType:    ProxyTypeMobile,
+				url:          "socks5://mobile-proxy:1080",
+				name:         "mobile_proxy",
+				stats:        registry,
+			},
+			{
+				proxyNetwork: ProxyNetworkAny,
+				proxyType:    ProxyTypeResidential,
+				url:          "socks5://residential-proxy:1080",
+				name:         "residential_proxy",
+				stats:        registry,
+			},
+		},
+	}
+
+	// Select mobile proxy
+	ctx := WithProxyType(context.Background(), ProxyTypeMobile)
+	proxy, err := d.selectProxy(ctx, "tcp", "example.com:80")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if proxy == nil || proxy.proxyType != ProxyTypeMobile {
+		t.Fatal("expected mobile proxy")
+	}
+
+	// Select residential proxy
+	ctx = WithProxyType(context.Background(), ProxyTypeResidential)
+	proxy, err = d.selectProxy(ctx, "tcp", "example.com:80")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if proxy == nil || proxy.proxyType != ProxyTypeResidential {
+		t.Fatal("expected residential proxy")
+	}
+
+	// Verify stats
+	mobileRequestsName, _ := makeProxyRequestsMetricName("mobile_proxy")
+	residentialRequestsName, _ := makeProxyRequestsMetricName("residential_proxy")
+
+	mobileCounter := registry.RegisterCounter(mobileRequestsName, "")
+	residentialCounter := registry.RegisterCounter(residentialRequestsName, "")
+
+	if mobileCounter.Get() != 1 {
+		t.Errorf("Expected mobile_proxy request count 1, got %d", mobileCounter.Get())
+	}
+	if residentialCounter.Get() != 1 {
+		t.Errorf("Expected residential_proxy request count 1, got %d", residentialCounter.Get())
+	}
 }
