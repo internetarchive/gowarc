@@ -110,7 +110,7 @@ func (w *Writer) WriteRecord(r *Record) (recordID string, err error) {
 	}
 
 	if written > 0 {
-		w.stats.RegisterCounter(totalDataWritten, totalDataWrittenHelp).Add(written)
+		w.stats.RegisterCounter(totalDataWritten, totalDataWrittenHelp, nil).WithLabels(nil).Add(written)
 	}
 
 	if _, err := io.WriteString(w.FileWriter, "\r\n\r\n"); err != nil {

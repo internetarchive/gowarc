@@ -497,62 +497,70 @@ func TestProxySelection(t *testing.T) {
 	})
 }
 
-// TestProxyStatsMetricNames tests the proxy metric name generation functions
+// TestProxyStatsMetricNames tests that proxy metrics use labels to distinguish between proxies
 func TestProxyStatsMetricNames(t *testing.T) {
+	registry := newLocalRegistry()
+
 	tests := []struct {
-		name           string
-		proxyName      string
-		expectedMetric string
-		expectedHelp   string
-		metricFunc     func(string) (string, string)
+		name      string
+		proxyName string
 	}{
 		{
-			name:           "requests metric for simple proxy",
-			proxyName:      "example_com_8080",
-			expectedMetric: "proxy_example_com_8080_requests_total",
-			expectedHelp:   "Total number of requests gone through this proxy",
-			metricFunc:     makeProxyRequestsMetricName,
+			name:      "simple proxy",
+			proxyName: "example_com_8080",
 		},
 		{
-			name:           "errors metric for simple proxy",
-			proxyName:      "example_com_8080",
-			expectedMetric: "proxy_example_com_8080_errors_total",
-			expectedHelp:   "Total number of errors occurred with this proxy",
-			metricFunc:     makeProxyErrorsMetricName,
+			name:      "IPv4 proxy",
+			proxyName: "192_168_1_1_3128",
 		},
 		{
-			name:           "last used metric for simple proxy",
-			proxyName:      "example_com_8080",
-			expectedMetric: "proxy_example_com_8080_last_used_nanoseconds",
-			expectedHelp:   "Last time this proxy was used in seconds (unix timestamp ns)",
-			metricFunc:     makeProxyLastUsedMetricName,
-		},
-		{
-			name:           "requests metric for IPv4 proxy",
-			proxyName:      "192_168_1_1_3128",
-			expectedMetric: "proxy_192_168_1_1_3128_requests_total",
-			expectedHelp:   "Total number of requests gone through this proxy",
-			metricFunc:     makeProxyRequestsMetricName,
-		},
-		{
-			name:           "errors metric for IPv6 proxy",
-			proxyName:      "2001_db8__1_8080",
-			expectedMetric: "proxy_2001_db8__1_8080_errors_total",
-			expectedHelp:   "Total number of errors occurred with this proxy",
-			metricFunc:     makeProxyErrorsMetricName,
+			name:      "IPv6 proxy",
+			proxyName: "2001_db8__1_8080",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			metric, help := tt.metricFunc(tt.proxyName)
-			if metric != tt.expectedMetric {
-				t.Errorf("Expected metric name %s, got %s", tt.expectedMetric, metric)
+			// Register counters for this proxy using labels
+			requestsCounter := registry.RegisterCounter(proxyRequestsTotal, proxyRequestsHelp, []string{"proxy"}).WithLabels(Labels{"proxy": tt.proxyName})
+			errorsCounter := registry.RegisterCounter(proxyErrorsTotal, proxyErrorsHelp, []string{"proxy"}).WithLabels(Labels{"proxy": tt.proxyName})
+			lastUsedGauge := registry.RegisterGauge(proxyLastUsedTotal, proxyLastUsedHelp, []string{"proxy"}).WithLabels(Labels{"proxy": tt.proxyName})
+
+			// Verify counters start at 0
+			if requestsCounter.Get() != 0 {
+				t.Errorf("Expected requests counter to start at 0, got %d", requestsCounter.Get())
 			}
-			if help != tt.expectedHelp {
-				t.Errorf("Expected help text %s, got %s", tt.expectedHelp, help)
+			if errorsCounter.Get() != 0 {
+				t.Errorf("Expected errors counter to start at 0, got %d", errorsCounter.Get())
+			}
+
+			// Increment counters
+			requestsCounter.Add(5)
+			errorsCounter.Add(2)
+			lastUsedGauge.Set(123456789)
+
+			// Verify values are independent per proxy
+			if requestsCounter.Get() != 5 {
+				t.Errorf("Expected requests counter to be 5, got %d", requestsCounter.Get())
+			}
+			if errorsCounter.Get() != 2 {
+				t.Errorf("Expected errors counter to be 2, got %d", errorsCounter.Get())
+			}
+			if lastUsedGauge.Get() != 123456789 {
+				t.Errorf("Expected last used gauge to be 123456789, got %d", lastUsedGauge.Get())
 			}
 		})
+	}
+
+	// Verify that different proxy labels create independent counters
+	proxy1Counter := registry.RegisterCounter(proxyRequestsTotal, proxyRequestsHelp, []string{"proxy"}).WithLabels(Labels{"proxy": "example_com_8080"})
+	proxy2Counter := registry.RegisterCounter(proxyRequestsTotal, proxyRequestsHelp, []string{"proxy"}).WithLabels(Labels{"proxy": "192_168_1_1_3128"})
+
+	if proxy1Counter.Get() != 5 {
+		t.Errorf("Expected proxy1 counter to be 5 (from earlier test), got %d", proxy1Counter.Get())
+	}
+	if proxy2Counter.Get() != 5 {
+		t.Errorf("Expected proxy2 counter to be 5 (from earlier test), got %d", proxy2Counter.Get())
 	}
 }
 
@@ -592,11 +600,8 @@ func TestProxyStatsRequestCount(t *testing.T) {
 
 	// Verify both proxies were used (round-robin)
 	// With 5 selections: proxy1 should be used 3 times, proxy2 should be used 2 times
-	proxy1RequestsName, _ := makeProxyRequestsMetricName("proxy1_1080")
-	proxy2RequestsName, _ := makeProxyRequestsMetricName("proxy2_1080")
-
-	proxy1Counter := registry.RegisterCounter(proxy1RequestsName, "")
-	proxy2Counter := registry.RegisterCounter(proxy2RequestsName, "")
+	proxy1Counter := registry.RegisterCounter(proxyRequestsTotal, proxyRequestsHelp, []string{"proxy"}).WithLabels(Labels{"proxy": "proxy1_1080"})
+	proxy2Counter := registry.RegisterCounter(proxyRequestsTotal, proxyRequestsHelp, []string{"proxy"}).WithLabels(Labels{"proxy": "proxy2_1080"})
 
 	if proxy1Counter.Get() != 3 {
 		t.Errorf("Expected proxy1 request count 3, got %d", proxy1Counter.Get())
@@ -638,8 +643,7 @@ func TestProxyStatsLastUsed(t *testing.T) {
 	timeAfter := time.Now().UnixNano()
 
 	// Verify last used timestamp is within expected range
-	lastUsedName, _ := makeProxyLastUsedMetricName("proxy_1080")
-	lastUsedGauge := registry.RegisterGauge(lastUsedName, "")
+	lastUsedGauge := registry.RegisterGauge(proxyLastUsedTotal, proxyLastUsedHelp, []string{"proxy"}).WithLabels(Labels{"proxy": "proxy_1080"})
 	lastUsed := lastUsedGauge.Get()
 
 	if lastUsed < timeBefore || lastUsed > timeAfter {
@@ -738,8 +742,7 @@ func TestProxyStatsMultipleProxiesRoundRobin(t *testing.T) {
 	// Verify each proxy was used exactly 4 times
 	for i := 1; i <= 3; i++ {
 		proxyName := "proxy" + string(rune('0'+i))
-		requestsName, _ := makeProxyRequestsMetricName(proxyName)
-		counter := registry.RegisterCounter(requestsName, "")
+		counter := registry.RegisterCounter(proxyRequestsTotal, proxyRequestsHelp, []string{"proxy"}).WithLabels(Labels{"proxy": proxyName})
 
 		expectedCount := int64(4)
 		if counter.Get() != expectedCount {
@@ -793,11 +796,8 @@ func TestProxyStatsWithDomainFiltering(t *testing.T) {
 	}
 
 	// Verify stats
-	exampleRequestsName, _ := makeProxyRequestsMetricName("example_proxy")
-	testRequestsName, _ := makeProxyRequestsMetricName("test_proxy")
-
-	exampleCounter := registry.RegisterCounter(exampleRequestsName, "")
-	testCounter := registry.RegisterCounter(testRequestsName, "")
+	exampleCounter := registry.RegisterCounter(proxyRequestsTotal, proxyRequestsHelp, []string{"proxy"}).WithLabels(Labels{"proxy": "example_proxy"})
+	testCounter := registry.RegisterCounter(proxyRequestsTotal, proxyRequestsHelp, []string{"proxy"}).WithLabels(Labels{"proxy": "test_proxy"})
 
 	if exampleCounter.Get() != 1 {
 		t.Errorf("Expected example_proxy request count 1, got %d", exampleCounter.Get())
@@ -851,11 +851,8 @@ func TestProxyStatsProxyTypeFiltering(t *testing.T) {
 	}
 
 	// Verify stats
-	mobileRequestsName, _ := makeProxyRequestsMetricName("mobile_proxy")
-	residentialRequestsName, _ := makeProxyRequestsMetricName("residential_proxy")
-
-	mobileCounter := registry.RegisterCounter(mobileRequestsName, "")
-	residentialCounter := registry.RegisterCounter(residentialRequestsName, "")
+	mobileCounter := registry.RegisterCounter(proxyRequestsTotal, proxyRequestsHelp, []string{"proxy"}).WithLabels(Labels{"proxy": "mobile_proxy"})
+	residentialCounter := registry.RegisterCounter(proxyRequestsTotal, proxyRequestsHelp, []string{"proxy"}).WithLabels(Labels{"proxy": "residential_proxy"})
 
 	if mobileCounter.Get() != 1 {
 		t.Errorf("Expected mobile_proxy request count 1, got %d", mobileCounter.Get())

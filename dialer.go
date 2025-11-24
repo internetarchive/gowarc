@@ -304,8 +304,8 @@ func (d *customDialer) selectProxy(ctx context.Context, network, address string)
 
 	// Update proxy statistics
 	if selectedProxy.stats != nil {
-		selectedProxy.stats.RegisterCounter(makeProxyRequestsMetricName(selectedProxy.name)).Add(1)
-		selectedProxy.stats.RegisterGauge(makeProxyLastUsedMetricName(selectedProxy.name)).Set(time.Now().UnixNano())
+		selectedProxy.stats.RegisterCounter(proxyRequestsTotal, proxyRequestsHelp, []string{"proxy"}).WithLabels(Labels{"proxy": selectedProxy.name}).Add(1)
+		selectedProxy.stats.RegisterGauge(proxyLastUsedTotal, proxyLastUsedHelp, []string{"proxy"}).WithLabels(Labels{"proxy": selectedProxy.name}).Set(time.Now().UnixNano())
 	}
 
 	return selectedProxy, nil
@@ -439,7 +439,7 @@ func (d *customDialer) CustomDialContext(ctx context.Context, network, address s
 	if selectedProxy != nil {
 		conn, err = selectedProxy.dialer.DialContext(ctx, network, dialAddr)
 		if err != nil && selectedProxy.stats != nil {
-			selectedProxy.stats.RegisterCounter(makeProxyErrorsMetricName(selectedProxy.name)).Add(1)
+			selectedProxy.stats.RegisterCounter(proxyErrorsTotal, proxyErrorsHelp, []string{"proxy"}).WithLabels(Labels{"proxy": selectedProxy.name}).Add(1)
 		}
 	} else {
 		if d.client.randomLocalIP {
@@ -514,7 +514,7 @@ func (d *customDialer) CustomDialTLSContext(ctx context.Context, network, addres
 	if selectedProxy != nil {
 		plainConn, err = selectedProxy.dialer.DialContext(ctx, network, dialAddr)
 		if err != nil && selectedProxy.stats != nil {
-			selectedProxy.stats.RegisterCounter(makeProxyErrorsMetricName(selectedProxy.name)).Add(1)
+			selectedProxy.stats.RegisterCounter(proxyErrorsTotal, proxyErrorsHelp, []string{"proxy"}).WithLabels(Labels{"proxy": selectedProxy.name}).Add(1)
 		}
 	} else {
 		if d.client.randomLocalIP {
@@ -553,7 +553,7 @@ func (d *customDialer) CustomDialTLSContext(ctx context.Context, network, addres
 	if err := tlsConn.HandshakeContext(handshakeCtx); err != nil {
 		// Track TLS handshake errors for proxy connections
 		if selectedProxy != nil && selectedProxy.stats != nil {
-			selectedProxy.stats.RegisterCounter(makeProxyErrorsMetricName(selectedProxy.name)).Add(1)
+			selectedProxy.stats.RegisterCounter(proxyErrorsTotal, proxyErrorsHelp, []string{"proxy"}).WithLabels(Labels{"proxy": selectedProxy.name}).Add(1)
 		}
 		closeErr := plainConn.Close()
 		if closeErr != nil {
@@ -833,8 +833,8 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 		if d.client.dedupeOptions.LocalDedupe {
 			revisit = d.checkLocalRevisit(payloadDigest)
 			if revisit.targetURI != "" {
-				d.stats.RegisterCounter(localDedupedBytesTotal, localDedupedBytesTotalHelp).Add(int64(revisit.size))
-				d.stats.RegisterCounter(localDedupedTotal, localDedupedTotalHelp).Add(1)
+				d.stats.RegisterCounter(localDedupedBytesTotal, localDedupedBytesTotalHelp, nil).WithLabels(nil).Add(int64(revisit.size))
+				d.stats.RegisterCounter(localDedupedTotal, localDedupedTotalHelp, nil).WithLabels(nil).Add(1)
 			}
 		}
 
@@ -843,8 +843,8 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 		if d.client.dedupeOptions.DoppelgangerDedupe && d.client.DigestAlgorithm == SHA1 && revisit.targetURI == "" {
 			revisit, _ = checkDoppelgangerRevisit(d.client.dedupeOptions.DoppelgangerHost, payloadDigest, warcTargetURI)
 			if revisit.targetURI != "" {
-				d.stats.RegisterCounter(doppelgangerDedupedBytesTotal, doppelgangerDedupedBytesTotalHelp).Add(bytesCopied)
-				d.stats.RegisterCounter(doppelgangerDedupedTotal, doppelgangerDedupedTotalHelp).Add(1)
+				d.stats.RegisterCounter(doppelgangerDedupedBytesTotal, doppelgangerDedupedBytesTotalHelp, nil).WithLabels(nil).Add(bytesCopied)
+				d.stats.RegisterCounter(doppelgangerDedupedTotal, doppelgangerDedupedTotalHelp, nil).WithLabels(nil).Add(1)
 			}
 		}
 
@@ -852,8 +852,8 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 		if d.client.dedupeOptions.CDXDedupe && d.client.DigestAlgorithm == SHA1 && revisit.targetURI == "" {
 			revisit, _ = checkCDXRevisit(d.client.dedupeOptions.CDXURL, payloadDigest, warcTargetURI, d.client.dedupeOptions.CDXCookie)
 			if revisit.targetURI != "" {
-				d.stats.RegisterCounter(cdxDedupedBytesTotal, cdxDedupedBytesTotalHelp).Add(bytesCopied)
-				d.stats.RegisterCounter(cdxDedupedTotal, cdxDedupedTotalHelp).Add(1)
+				d.stats.RegisterCounter(cdxDedupedBytesTotal, cdxDedupedBytesTotalHelp, nil).WithLabels(nil).Add(bytesCopied)
+				d.stats.RegisterCounter(cdxDedupedTotal, cdxDedupedTotalHelp, nil).WithLabels(nil).Add(1)
 			}
 		}
 	}

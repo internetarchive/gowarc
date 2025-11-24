@@ -204,7 +204,7 @@ func TestHTTPClient(t *testing.T) {
 	}
 
 	// verify that the remote dedupe count is correct
-	dataTotal := httpClient.statsRegistry.RegisterCounter(totalDataWritten, totalDataWrittenHelp).Get()
+	dataTotal := httpClient.statsRegistry.RegisterCounter(totalDataWritten, totalDataWrittenHelp, nil).WithLabels(nil).Get()
 	if dataTotal != expectedPayloadBytes {
 		t.Fatalf("total bytes downloaded mismatch, expected %d got %d", expectedPayloadBytes, dataTotal)
 	}
@@ -896,13 +896,13 @@ func TestHTTPClientLocalDedupe(t *testing.T) {
 	}
 
 	// verify that the local dedupe count is correct
-	if httpClient.statsRegistry.RegisterCounter(localDedupedBytesTotal, localDedupedBytesTotalHelp).Get() != 26872 {
-		t.Fatalf("local dedupe total bytes mismatch, expected: 26872 got: %d", httpClient.statsRegistry.RegisterCounter(localDedupedBytesTotal, localDedupedBytesTotalHelp).Get())
+	if httpClient.statsRegistry.RegisterCounter(localDedupedBytesTotal, localDedupedBytesTotalHelp, nil).WithLabels(nil).Get() != 26872 {
+		t.Fatalf("local dedupe total bytes mismatch, expected: 26872 got: %d", httpClient.statsRegistry.RegisterCounter(localDedupedBytesTotal, localDedupedBytesTotalHelp, nil).WithLabels(nil).Get())
 	}
 
 	// 1 is expected due to requiring one request to enter into the table.
-	if httpClient.statsRegistry.RegisterCounter(localDedupedTotal, localDedupedTotalHelp).Get() != 1 {
-		t.Fatalf("local dedupe total mismatch, expected: 1 got: %d", httpClient.statsRegistry.RegisterCounter(localDedupedTotal, localDedupedTotalHelp).Get())
+	if httpClient.statsRegistry.RegisterCounter(localDedupedTotal, localDedupedTotalHelp, nil).WithLabels(nil).Get() != 1 {
+		t.Fatalf("local dedupe total mismatch, expected: 1 got: %d", httpClient.statsRegistry.RegisterCounter(localDedupedTotal, localDedupedTotalHelp, nil).WithLabels(nil).Get())
 	}
 }
 
@@ -981,12 +981,12 @@ func TestHTTPClientRemoteDedupe(t *testing.T) {
 	}
 
 	// verify that the CDX dedupe count is correct
-	if httpClient.statsRegistry.RegisterCounter(cdxDedupedBytesTotal, cdxDedupedBytesTotalHelp).Get() != 107488 {
-		t.Fatalf("CDX dedupe total bytes mismatch, expected: 26872 got: %d", httpClient.statsRegistry.RegisterCounter(cdxDedupedBytesTotal, cdxDedupedBytesTotalHelp).Get())
+	if httpClient.statsRegistry.RegisterCounter(cdxDedupedBytesTotal, cdxDedupedBytesTotalHelp, nil).WithLabels(nil).Get() != 107488 {
+		t.Fatalf("CDX dedupe total bytes mismatch, expected: 26872 got: %d", httpClient.statsRegistry.RegisterCounter(cdxDedupedBytesTotal, cdxDedupedBytesTotalHelp, nil).WithLabels(nil).Get())
 	}
 
-	if httpClient.statsRegistry.RegisterCounter(cdxDedupedTotal, cdxDedupedTotalHelp).Get() != 4 {
-		t.Fatalf("CDX dedupe total mismatch, expected: 1 got: %d", httpClient.statsRegistry.RegisterCounter(cdxDedupedTotal, cdxDedupedTotalHelp).Get())
+	if httpClient.statsRegistry.RegisterCounter(cdxDedupedTotal, cdxDedupedTotalHelp, nil).WithLabels(nil).Get() != 4 {
+		t.Fatalf("CDX dedupe total mismatch, expected: 1 got: %d", httpClient.statsRegistry.RegisterCounter(cdxDedupedTotal, cdxDedupedTotalHelp, nil).WithLabels(nil).Get())
 	}
 }
 
@@ -1071,12 +1071,12 @@ func TestHTTPClientDoppelgangerDedupe(t *testing.T) {
 	}
 
 	// verify that the Doppelganger count is correct
-	if httpClient.statsRegistry.RegisterCounter(doppelgangerDedupedBytesTotal, doppelgangerDedupedBytesTotalHelp).Get() != 107488 {
-		t.Fatalf("Doppelganger total bytes mismatch, expected: 26872 got: %d", httpClient.statsRegistry.RegisterCounter(doppelgangerDedupedBytesTotal, doppelgangerDedupedBytesTotalHelp).Get())
+	if httpClient.statsRegistry.RegisterCounter(doppelgangerDedupedBytesTotal, doppelgangerDedupedBytesTotalHelp, nil).WithLabels(nil).Get() != 107488 {
+		t.Fatalf("Doppelganger total bytes mismatch, expected: 26872 got: %d", httpClient.statsRegistry.RegisterCounter(doppelgangerDedupedBytesTotal, doppelgangerDedupedBytesTotalHelp, nil).WithLabels(nil).Get())
 	}
 
-	if httpClient.statsRegistry.RegisterCounter(doppelgangerDedupedTotal, doppelgangerDedupedTotalHelp).Get() != 4 {
-		t.Fatalf("Doppelganger total mismatch, expected: 1 got: %d", httpClient.statsRegistry.RegisterCounter(doppelgangerDedupedTotal, doppelgangerDedupedTotalHelp).Get())
+	if httpClient.statsRegistry.RegisterCounter(doppelgangerDedupedTotal, doppelgangerDedupedTotalHelp, nil).WithLabels(nil).Get() != 4 {
+		t.Fatalf("Doppelganger total mismatch, expected: 1 got: %d", httpClient.statsRegistry.RegisterCounter(doppelgangerDedupedTotal, doppelgangerDedupedTotalHelp, nil).WithLabels(nil).Get())
 	}
 }
 
@@ -1139,12 +1139,12 @@ func TestHTTPClientDedupeEmptyPayload(t *testing.T) {
 	}
 
 	// verify that the local dedupe count is correct
-	if httpClient.statsRegistry.RegisterCounter(localDedupedBytesTotal, localDedupedBytesTotalHelp).Get() != 0 {
-		t.Fatalf("local dedupe total bytes mismatch, expected: 26872 got: %d", httpClient.statsRegistry.RegisterCounter(localDedupedBytesTotal, localDedupedBytesTotalHelp).Get())
+	if httpClient.statsRegistry.RegisterCounter(localDedupedBytesTotal, localDedupedBytesTotalHelp, nil).WithLabels(nil).Get() != 0 {
+		t.Fatalf("local dedupe total bytes mismatch, expected: 26872 got: %d", httpClient.statsRegistry.RegisterCounter(localDedupedBytesTotal, localDedupedBytesTotalHelp, nil).WithLabels(nil).Get())
 	}
 
-	if httpClient.statsRegistry.RegisterCounter(localDedupedTotal, localDedupedTotalHelp).Get() != 0 {
-		t.Fatalf("local dedupe total mismatch, expected: 1 got: %d", httpClient.statsRegistry.RegisterCounter(localDedupedTotal, localDedupedTotalHelp).Get())
+	if httpClient.statsRegistry.RegisterCounter(localDedupedTotal, localDedupedTotalHelp, nil).WithLabels(nil).Get() != 0 {
+		t.Fatalf("local dedupe total mismatch, expected: 1 got: %d", httpClient.statsRegistry.RegisterCounter(localDedupedTotal, localDedupedTotalHelp, nil).WithLabels(nil).Get())
 	}
 }
 

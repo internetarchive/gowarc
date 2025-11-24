@@ -1,6 +1,9 @@
 package warc
 
 import (
+	"fmt"
+	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 )
@@ -34,29 +37,92 @@ const (
 	cdxDedupedTotal     string = "cdx_deduped_total"
 	cdxDedupedTotalHelp string = "Total records deduped using CDX"
 
-	proxyPrefix         string = "proxy_"
-	proxyRequestsSuffix string = "_requests_total"
-	proxyRequestsHelp   string = "Total number of requests gone through this proxy"
-	proxyErrorsSuffix   string = "_errors_total"
-	proxyErrorsHelp     string = "Total number of errors occurred with this proxy"
-	proxyLastUsedSuffix string = "_last_used_nanoseconds"
-	proxyLastUsedHelp   string = "Last time this proxy was used in seconds (unix timestamp ns)"
+	// proxyRequestsTotal is the name of the metric that tracks the total number of requests gone through a proxy.
+	proxyRequestsTotal string = "proxy_requests_total"
+	proxyRequestsHelp  string = "Total number of requests gone through a proxy"
+
+	// proxyErrorsTotal is the name of the metric that tracks the total number of errors occurred with a proxy.
+	proxyErrorsTotal string = "proxy_errors_total"
+	proxyErrorsHelp  string = "Total number of errors occurred with a proxy"
+
+	// proxyLastUsedTotal is the name of the metric that tracks the last time a proxy was used.
+	proxyLastUsedTotal string = "proxy_last_used_nanoseconds"
+	proxyLastUsedHelp  string = "Last time a proxy was used in seconds (unix timestamp ns)"
 )
 
-func makeProxyRequestsMetricName(proxyName string) (string, string) {
-	return proxyPrefix + proxyName + proxyRequestsSuffix, proxyRequestsHelp
+// Labels represents Prometheus-style label values as key-value pairs.
+// Labels are used with WithLabels() to specify concrete label values when recording metrics.
+//
+// Example usage with labels:
+//
+//	registry := newLocalRegistry()
+//
+//	// Register a counter with label names (declares which dimensions the metric tracks)
+//	httpRequests := registry.RegisterCounter("http_requests_total", "Total HTTP requests", []string{"method", "status"})
+//
+//	// Use WithLabels to specify label values when recording
+//	httpRequests.WithLabels(Labels{"method": "GET", "status": "200"}).Inc()
+//	httpRequests.WithLabels(Labels{"method": "POST", "status": "201"}).Add(5)
+//	httpRequests.WithLabels(Labels{"method": "GET", "status": "404"}).Inc()
+//
+//	// Each unique combination of label values creates a separate metric series
+//	// The counter with method=GET,status=200 has value 1
+//	// The counter with method=POST,status=201 has value 5
+//	// The counter with method=GET,status=404 has value 1
+//
+// Example usage without labels:
+//
+//	// For metrics without labels, pass nil or empty slice when registering
+//	totalCounter := registry.RegisterCounter("requests_total", "All requests", nil)
+//	// WithLabels(nil) is required but the labels parameter is ignored
+//	totalCounter.WithLabels(nil).Inc()
+//
+// Labels are internally sorted by key to ensure consistent metric identification
+// regardless of the order in which they are specified. This means:
+//
+//	Labels{"method": "GET", "status": "200"} == Labels{"status": "200", "method": "GET"}
+type Labels map[string]string
+
+// labelsToString converts labels to a consistent string representation for use as map keys.
+// Labels are sorted by key to ensure consistent ordering.
+func labelsToString(labels Labels) string {
+	if len(labels) == 0 {
+		return ""
+	}
+
+	// Sort keys for consistent ordering
+	keys := make([]string, 0, len(labels))
+	for k := range labels {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	// Build string representation
+	parts := make([]string, 0, len(labels))
+	for _, k := range keys {
+		parts = append(parts, fmt.Sprintf("%s=%q", k, labels[k]))
+	}
+	return strings.Join(parts, ",")
 }
 
-func makeProxyErrorsMetricName(proxyName string) (string, string) {
-	return proxyPrefix + proxyName + proxyErrorsSuffix, proxyErrorsHelp
+// makeMetricKey creates a unique key for a metric with labels.
+func makeMetricKey(name string, labels Labels) string {
+	if len(labels) == 0 {
+		return name
+	}
+	return name + "{" + labelsToString(labels) + "}"
 }
 
-func makeProxyLastUsedMetricName(proxyName string) (string, string) {
-	return proxyPrefix + proxyName + proxyLastUsedSuffix, proxyLastUsedHelp
+// RegistryOpts is an interface that provides a WithLabels method to get a metric with specific labels.
+type RegistryOpts[T any] interface {
+	// WithLabels returns a Counter for the given label values.
+	// If the counter has no labels, labels parameter is ignored.
+	WithLabels(labels Labels) T
 }
 
 // Counter represents a monotonically increasing metric.
 type Counter interface {
+	RegistryOpts[Counter]
 	// Inc increments the counter by 1.
 	Inc()
 	// Add adds the given value to the counter.
@@ -68,6 +134,7 @@ type Counter interface {
 
 // Gauge represents a metric that can go up or down.
 type Gauge interface {
+	RegistryOpts[Gauge]
 	// Set sets the gauge to the given value.
 	Set(value int64)
 	// Inc increments the gauge by 1.
@@ -85,6 +152,7 @@ type Gauge interface {
 
 // Histogram represents a metric for observing distributions of values.
 type Histogram interface {
+	RegistryOpts[Histogram]
 	// Observe adds a single observation to the histogram.
 	Observe(value int64)
 }
@@ -92,18 +160,24 @@ type Histogram interface {
 // StatsRegistry provides a registry for external libraries to register and update metrics.
 // The StatsRegistry implementation is expected to be thread-safe so that gowarc can safely register and update metrics from multiple goroutines.
 type StatsRegistry interface {
-	// RegisterCounter registers a new counter metric.
-	// Returns an existing counter if one with the same name was already registered.
-	RegisterCounter(name, help string) Counter
+	// RegisterCounter registers a new counter metric with optional label names.
+	// labelNames specifies which labels this counter will use (e.g., []string{"method", "status"}).
+	// Returns a Counter that can be used with WithLabels() to specify label values.
+	// If labelNames is nil or empty, returns a Counter that ignores labels.
+	RegisterCounter(name, help string, labelNames []string) Counter
 
-	// RegisterGauge registers a new gauge metric.
-	// Returns an existing gauge if one with the same name was already registered.
-	RegisterGauge(name, help string) Gauge
+	// RegisterGauge registers a new gauge metric with optional label names.
+	// labelNames specifies which labels this gauge will use (e.g., []string{"location", "type"}).
+	// Returns a Gauge that can be used with WithLabels() to specify label values.
+	// If labelNames is nil or empty, returns a Gauge that ignores labels.
+	RegisterGauge(name, help string, labelNames []string) Gauge
 
-	// RegisterHistogram registers a new histogram metric with the given buckets.
+	// RegisterHistogram registers a new histogram metric with the given buckets and optional label names.
 	// If buckets is nil, uses Prometheus default buckets.
-	// Returns an existing histogram if one with the same name was already registered.
-	RegisterHistogram(name, help string, buckets []int64) Histogram
+	// labelNames specifies which labels this histogram will use (e.g., []string{"endpoint", "method"}).
+	// Returns a Histogram that can be used with WithLabels() to specify label values.
+	// If labelNames is nil or empty, returns a Histogram that ignores labels.
+	RegisterHistogram(name, help string, buckets []int64, labelNames []string) Histogram
 }
 
 // Nil-safe implementations for when no StatsRegistry is provided.
@@ -111,24 +185,97 @@ type localCounter struct {
 	v atomic.Int64
 }
 
-func (n *localCounter) Inc()            { n.v.Add(1) }
-func (n *localCounter) Add(value int64) { n.v.Add(value) }
-func (n *localCounter) Get() int64      { return n.v.Load() }
+func (n *localCounter) WithLabels(_ Labels) Counter { return n }
+func (n *localCounter) Inc()                        { n.v.Add(1) }
+func (n *localCounter) Add(value int64)             { n.v.Add(value) }
+func (n *localCounter) Get() int64                  { return n.v.Load() }
 
 type localGauge struct {
 	v atomic.Int64
 }
 
-func (n *localGauge) Set(value int64) { n.v.Store(value) }
-func (n *localGauge) Inc()            { n.v.Add(1) }
-func (n *localGauge) Dec()            { n.v.Add(-1) }
-func (n *localGauge) Add(value int64) { n.v.Add(value) }
-func (n *localGauge) Sub(value int64) { n.v.Add(-value) }
-func (n *localGauge) Get() int64      { return n.v.Load() }
+func (n *localGauge) WithLabels(_ Labels) Gauge { return n }
+func (n *localGauge) Set(value int64)           { n.v.Store(value) }
+func (n *localGauge) Inc()                      { n.v.Add(1) }
+func (n *localGauge) Dec()                      { n.v.Add(-1) }
+func (n *localGauge) Add(value int64)           { n.v.Add(value) }
+func (n *localGauge) Sub(value int64)           { n.v.Add(-value) }
+func (n *localGauge) Get() int64                { return n.v.Load() }
 
 type localHistogram struct{}
 
-func (n *localHistogram) Observe(_ int64) {}
+func (n *localHistogram) WithLabels(_ Labels) Histogram { return n }
+func (n *localHistogram) Observe(_ int64)               {}
+
+// labeledCounter implements Counter with label support
+type labeledCounter struct {
+	name     string
+	registry *localRegistry
+}
+
+func (l *labeledCounter) WithLabels(labels Labels) Counter {
+	return l.registry.getOrCreateCounter(l.name, labels)
+}
+
+func (l *labeledCounter) Inc() {
+	l.registry.getOrCreateCounter(l.name, nil).Inc()
+}
+
+func (l *labeledCounter) Add(value int64) {
+	l.registry.getOrCreateCounter(l.name, nil).Add(value)
+}
+
+func (l *labeledCounter) Get() int64 {
+	return l.registry.getOrCreateCounter(l.name, nil).Get()
+}
+
+// labeledGauge implements Gauge with label support
+type labeledGauge struct {
+	name     string
+	registry *localRegistry
+}
+
+func (l *labeledGauge) WithLabels(labels Labels) Gauge {
+	return l.registry.getOrCreateGauge(l.name, labels)
+}
+
+func (l *labeledGauge) Set(value int64) {
+	l.registry.getOrCreateGauge(l.name, nil).Set(value)
+}
+
+func (l *labeledGauge) Inc() {
+	l.registry.getOrCreateGauge(l.name, nil).Inc()
+}
+
+func (l *labeledGauge) Dec() {
+	l.registry.getOrCreateGauge(l.name, nil).Dec()
+}
+
+func (l *labeledGauge) Add(value int64) {
+	l.registry.getOrCreateGauge(l.name, nil).Add(value)
+}
+
+func (l *labeledGauge) Sub(value int64) {
+	l.registry.getOrCreateGauge(l.name, nil).Sub(value)
+}
+
+func (l *labeledGauge) Get() int64 {
+	return l.registry.getOrCreateGauge(l.name, nil).Get()
+}
+
+// labeledHistogram implements Histogram with label support
+type labeledHistogram struct {
+	name     string
+	registry *localRegistry
+}
+
+func (l *labeledHistogram) WithLabels(labels Labels) Histogram {
+	return l.registry.getOrCreateHistogram(l.name, labels)
+}
+
+func (l *labeledHistogram) Observe(value int64) {
+	l.registry.getOrCreateHistogram(l.name, nil).Observe(value)
+}
 
 type localRegistry struct {
 	sync.Mutex
@@ -141,50 +288,68 @@ func newLocalRegistry() *localRegistry {
 	return &localRegistry{}
 }
 
-func (n *localRegistry) RegisterCounter(name, _ string) Counter {
+func (n *localRegistry) getOrCreateCounter(name string, labels Labels) Counter {
 	n.Lock()
 	defer n.Unlock()
-	var c *localCounter
-	var ok bool
 	if n.counters == nil {
 		n.counters = make(map[string]*localCounter)
 	}
-	if c, ok = n.counters[name]; ok {
+	key := makeMetricKey(name, labels)
+	if c, ok := n.counters[key]; ok {
 		return c
 	}
-	c = &localCounter{}
-	n.counters[name] = c
+	c := &localCounter{}
+	n.counters[key] = c
 	return c
 }
 
-func (n *localRegistry) RegisterGauge(name, _ string) Gauge {
+func (n *localRegistry) getOrCreateGauge(name string, labels Labels) Gauge {
 	n.Lock()
 	defer n.Unlock()
-	var g *localGauge
-	var ok bool
 	if n.gauges == nil {
 		n.gauges = make(map[string]*localGauge)
 	}
-	if g, ok = n.gauges[name]; ok {
+	key := makeMetricKey(name, labels)
+	if g, ok := n.gauges[key]; ok {
 		return g
 	}
-	g = &localGauge{}
-	n.gauges[name] = g
+	g := &localGauge{}
+	n.gauges[key] = g
 	return g
 }
 
-func (n *localRegistry) RegisterHistogram(name, _ string, _ []int64) Histogram {
+func (n *localRegistry) getOrCreateHistogram(name string, labels Labels) Histogram {
 	n.Lock()
 	defer n.Unlock()
-	var h *localHistogram
-	var ok bool
 	if n.histograms == nil {
 		n.histograms = make(map[string]*localHistogram)
 	}
-	if h, ok = n.histograms[name]; ok {
+	key := makeMetricKey(name, labels)
+	if h, ok := n.histograms[key]; ok {
 		return h
 	}
-	h = &localHistogram{}
-	n.histograms[name] = h
+	h := &localHistogram{}
+	n.histograms[key] = h
 	return h
+}
+
+func (n *localRegistry) RegisterCounter(name, _ string, _ []string) Counter {
+	return &labeledCounter{
+		name:     name,
+		registry: n,
+	}
+}
+
+func (n *localRegistry) RegisterGauge(name, _ string, _ []string) Gauge {
+	return &labeledGauge{
+		name:     name,
+		registry: n,
+	}
+}
+
+func (n *localRegistry) RegisterHistogram(name, _ string, _ []int64, _ []string) Histogram {
+	return &labeledHistogram{
+		name:     name,
+		registry: n,
+	}
 }
