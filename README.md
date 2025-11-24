@@ -142,6 +142,73 @@ The library handles DNS resolution differently depending on the connection type:
 
 **Important for Privacy**: When using `socks5h://` or other remote DNS proxies, your local DNS servers will not see any queries for the target domains, maintaining better privacy and anonymity.
 
+
+### Metrics and Observability
+
+`gowarc` provides a `StatsRegistry` interface that allows you to integrate your own metrics collection system (Prometheus, Datadog, etc.). The library tracks various metrics including data written, deduplication statistics, and proxy usage.
+
+#### Using the StatsRegistry Interface
+
+The `StatsRegistry` interface can be found in [`stats.go`](stats.go). To implement your own metrics collection:
+
+```go
+// Implement the StatsRegistry interface
+type MyPrometheusRegistry struct {
+    // Your Prometheus registry fields
+}
+
+func (r *MyPrometheusRegistry) RegisterCounter(name, help string, labelNames []string) warc.Counter {
+    // Return a Counter that wraps your Prometheus counter
+    // The Counter interface requires WithLabels() method for dimensional metrics
+}
+
+func (r *MyPrometheusRegistry) RegisterGauge(name, help string, labelNames []string) warc.Gauge {
+    // Return a Gauge that wraps your Prometheus gauge
+}
+
+func (r *MyPrometheusRegistry) RegisterHistogram(name, help string, buckets []int64, labelNames []string) warc.Histogram {
+    // Return a Histogram that wraps your Prometheus histogram
+}
+
+// Pass your registry to the HTTP client
+clientSettings := warc.HTTPClientSettings{
+    StatsRegistry: &MyPrometheusRegistry{},
+    // ... other settings
+}
+```
+
+#### Available Metrics
+
+The library tracks the following metrics:
+
+- **`total_data_written`**: Total bytes written to WARC files
+- **`local_deduped_bytes_total`**: Bytes saved through local deduplication
+- **`local_deduped_total`**: Number of records deduplicated locally
+- **`doppelganger_deduped_bytes_total`**: Bytes saved through Doppelganger deduplication
+- **`doppelganger_deduped_total`**: Number of records deduplicated via Doppelganger
+- **`cdx_deduped_bytes_total`**: Bytes saved through CDX deduplication
+- **`cdx_deduped_total`**: Number of records deduplicated via CDX
+- **`proxy_requests_total`**: Total requests through each proxy (with `proxy` label)
+- **`proxy_errors_total`**: Total errors for each proxy (with `proxy` label)
+- **`proxy_last_used_nanoseconds`**: Last usage timestamp for each proxy (with `proxy` label)
+
+#### Label Support
+
+Metrics support Prometheus-style labels for dimensional data:
+
+```go
+// Register a counter with label dimensions
+counter := registry.RegisterCounter("http_requests_total", "Total HTTP requests", []string{"method", "status"})
+
+// Record metrics with specific label values
+counter.WithLabels(warc.Labels{"method": "GET", "status": "200"}).Inc()
+counter.WithLabels(warc.Labels{"method": "POST", "status": "201"}).Add(5)
+
+// Each unique label combination creates a separate metric series
+```
+
+**Interface Details**: See the complete interface contract in [`stats.go`](stats.go) for full implementation requirements.
+
 ## CLI Tools
 
 In addition to the Go library, gowarc provides several command-line utilities for working with WARC files:
