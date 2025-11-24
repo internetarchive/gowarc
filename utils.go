@@ -40,7 +40,7 @@ func isHTTPRequest(line string) bool {
 }
 
 // NewWriter creates a new WARC writer.
-func NewWriter(writer io.Writer, fileName string, digestAlgorithm DigestAlgorithm, compression string, contentLengthHeader string, newFileCreation bool, dictionary []byte) (*Writer, error) {
+func NewWriter(writer io.Writer, fileName string, digestAlgorithm DigestAlgorithm, compression string, contentLengthHeader string, newFileCreation bool, dictionary []byte, stats StatsRegistry) (*Writer, error) {
 	if compression != "" {
 		switch strings.ToLower(compression) {
 		case "gzip":
@@ -52,6 +52,7 @@ func NewWriter(writer io.Writer, fileName string, digestAlgorithm DigestAlgorith
 				DigestAlgorithm: digestAlgorithm,
 				GZIPWriter:      gzipWriter,
 				FileWriter:      bufio.NewWriter(gzipWriter),
+				stats:           stats,
 			}, nil
 		case "zstd":
 			if newFileCreation && len(dictionary) > 0 {
@@ -94,6 +95,7 @@ func NewWriter(writer io.Writer, fileName string, digestAlgorithm DigestAlgorith
 					DigestAlgorithm: digestAlgorithm,
 					ZSTDWriter:      zstdWriter,
 					FileWriter:      bufio.NewWriter(zstdWriter),
+					stats:           stats,
 				}, nil
 			} else {
 				zstdWriter, err := zstd.NewWriter(writer, zstd.WithEncoderLevel(zstd.SpeedBetterCompression))
@@ -106,6 +108,7 @@ func NewWriter(writer io.Writer, fileName string, digestAlgorithm DigestAlgorith
 					DigestAlgorithm: digestAlgorithm,
 					ZSTDWriter:      zstdWriter,
 					FileWriter:      bufio.NewWriter(zstdWriter),
+					stats:           stats,
 				}, nil
 			}
 		default:
@@ -118,6 +121,7 @@ func NewWriter(writer io.Writer, fileName string, digestAlgorithm DigestAlgorith
 		Compression:     "",
 		DigestAlgorithm: digestAlgorithm,
 		FileWriter:      bufio.NewWriter(writer),
+		stats:           stats,
 	}, nil
 }
 

@@ -79,6 +79,8 @@ type customDialer struct {
 	disableIPv6        bool
 	dnsConcurrency     int
 	dnsRoundRobinIndex atomic.Uint32
+
+	stats StatsRegistry
 }
 
 var emptyPayloadDigests = []string{
@@ -90,6 +92,8 @@ var emptyPayloadDigests = []string{
 
 func newCustomDialer(httpClient *CustomHTTPClient, proxyURL string, DialTimeout, DNSRecordsTTL, DNSResolutionTimeout time.Duration, DNSCacheSize int, DNSServers []string, DNSConcurrency int, disableIPv4, disableIPv6 bool) (d *customDialer, err error) {
 	d = new(customDialer)
+
+	d.stats = httpClient.statsRegistry
 
 	d.Timeout = DialTimeout
 	d.client = httpClient
@@ -645,8 +649,8 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 		if d.client.dedupeOptions.LocalDedupe {
 			revisit = d.checkLocalRevisit(payloadDigest)
 			if revisit.targetURI != "" {
-				LocalDedupeTotalBytes.Add(int64(revisit.size))
-				LocalDedupeTotal.Add(1)
+				d.stats.RegisterCounter(localDedupedBytesTotal, localDedupedBytesTotalHelp).Add(int64(revisit.size))
+				d.stats.RegisterCounter(localDedupedTotal, localDedupedTotalHelp).Add(1)
 			}
 		}
 
@@ -655,8 +659,8 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 		if d.client.dedupeOptions.DoppelgangerDedupe && d.client.DigestAlgorithm == SHA1 && revisit.targetURI == "" {
 			revisit, _ = checkDoppelgangerRevisit(d.client.dedupeOptions.DoppelgangerHost, payloadDigest, warcTargetURI)
 			if revisit.targetURI != "" {
-				DoppelgangerDedupeTotalBytes.Add(bytesCopied)
-				DoppelgangerDedupeTotal.Add(1)
+				d.stats.RegisterCounter(doppelgangerDedupedBytesTotal, doppelgangerDedupedBytesTotalHelp).Add(bytesCopied)
+				d.stats.RegisterCounter(doppelgangerDedupedTotal, doppelgangerDedupedTotalHelp).Add(1)
 			}
 		}
 
@@ -664,8 +668,8 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 		if d.client.dedupeOptions.CDXDedupe && d.client.DigestAlgorithm == SHA1 && revisit.targetURI == "" {
 			revisit, _ = checkCDXRevisit(d.client.dedupeOptions.CDXURL, payloadDigest, warcTargetURI, d.client.dedupeOptions.CDXCookie)
 			if revisit.targetURI != "" {
-				CDXDedupeTotalBytes.Add(bytesCopied)
-				CDXDedupeTotal.Add(1)
+				d.stats.RegisterCounter(cdxDedupedBytesTotal, cdxDedupedBytesTotalHelp).Add(bytesCopied)
+				d.stats.RegisterCounter(cdxDedupedTotal, cdxDedupedTotalHelp).Add(1)
 			}
 		}
 	}

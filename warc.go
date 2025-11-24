@@ -32,20 +32,9 @@ type RotatorSettings struct {
 	WARCSize float64
 	// WARCWriterPoolSize defines the number of parallel WARC writers
 	WARCWriterPoolSize int
+	// StatsRegistry is used to store stats about gowarc
+	StatsRegistry StatsRegistry
 }
-
-var (
-	// Create a couple of counters for tracking various stats
-	DataTotal atomic.Int64
-
-	CDXDedupeTotalBytes          atomic.Int64
-	DoppelgangerDedupeTotalBytes atomic.Int64
-	LocalDedupeTotalBytes        atomic.Int64
-
-	CDXDedupeTotal          atomic.Int64
-	DoppelgangerDedupeTotal atomic.Int64
-	LocalDedupeTotal        atomic.Int64
-)
 
 // NewWARCRotator creates and return a channel that can be used
 // to communicate records to be written to WARC files to the
@@ -119,7 +108,7 @@ func recordWriter(settings *RotatorSettings, records chan *RecordBatch, done cha
 	}
 
 	// Initialize WARC writer
-	warcWriter, err := NewWriter(warcFile, currentFileName, settings.digestAlgorithm, settings.Compression, "", true, dictionary)
+	warcWriter, err := NewWriter(warcFile, currentFileName, settings.digestAlgorithm, settings.Compression, "", true, dictionary, settings.StatsRegistry)
 	if err != nil {
 		panic(err)
 	}
@@ -137,7 +126,7 @@ func recordWriter(settings *RotatorSettings, records chan *RecordBatch, done cha
 			panic(err)
 		}
 
-		warcWriter, err = NewWriter(warcFile, currentFileName, settings.digestAlgorithm, settings.Compression, "", false, dictionary)
+		warcWriter, err = NewWriter(warcFile, currentFileName, settings.digestAlgorithm, settings.Compression, "", false, dictionary, settings.StatsRegistry)
 		if err != nil {
 			panic(err)
 		}
@@ -176,7 +165,7 @@ func recordWriter(settings *RotatorSettings, records chan *RecordBatch, done cha
 				}
 
 				// Initialize new WARC writer
-				warcWriter, err = NewWriter(warcFile, currentFileName, settings.digestAlgorithm, settings.Compression, "", true, dictionary)
+				warcWriter, err = NewWriter(warcFile, currentFileName, settings.digestAlgorithm, settings.Compression, "", true, dictionary, settings.StatsRegistry)
 				if err != nil {
 					panic(err)
 				}
@@ -198,7 +187,7 @@ func recordWriter(settings *RotatorSettings, records chan *RecordBatch, done cha
 
 			// Write all the records of the record batch
 			for _, record := range recordBatch.Records {
-				warcWriter, err = NewWriter(warcFile, currentFileName, settings.digestAlgorithm, settings.Compression, record.Header.Get("Content-Length"), false, dictionary)
+				warcWriter, err = NewWriter(warcFile, currentFileName, settings.digestAlgorithm, settings.Compression, record.Header.Get("Content-Length"), false, dictionary, settings.StatsRegistry)
 				if err != nil {
 					panic(err)
 				}

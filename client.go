@@ -4,7 +4,6 @@ import (
 	"net/http"
 	"os"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -39,6 +38,7 @@ type HTTPClientSettings struct {
 	DisableIPv6           bool
 	IPv6AnyIP             bool
 	DigestAlgorithm       DigestAlgorithm
+	StatsRegistry         StatsRegistry
 }
 
 type CustomHTTPClient struct {
@@ -64,15 +64,8 @@ type CustomHTTPClient struct {
 	// If set to <= 0, the default value is DefaultMaxRAMUsageFraction.
 	MaxRAMUsageFraction float64
 	randomLocalIP       bool
-	DataTotal           *atomic.Int64
 
-	CDXDedupeTotalBytes          *atomic.Int64
-	DoppelgangerDedupeTotalBytes *atomic.Int64
-	LocalDedupeTotalBytes        *atomic.Int64
-
-	CDXDedupeTotal          *atomic.Int64
-	DoppelgangerDedupeTotal *atomic.Int64
-	LocalDedupeTotal        *atomic.Int64
+	statsRegistry StatsRegistry
 }
 
 func (c *CustomHTTPClient) Close() error {
@@ -106,16 +99,15 @@ func (c *CustomHTTPClient) Close() error {
 func NewWARCWritingHTTPClient(HTTPClientSettings HTTPClientSettings) (httpClient *CustomHTTPClient, err error) {
 	httpClient = new(CustomHTTPClient)
 
-	// Initialize counters
-	httpClient.DataTotal = &DataTotal
-
-	httpClient.CDXDedupeTotalBytes = &CDXDedupeTotalBytes
-	httpClient.DoppelgangerDedupeTotalBytes = &DoppelgangerDedupeTotalBytes
-	httpClient.LocalDedupeTotalBytes = &LocalDedupeTotalBytes
-
-	httpClient.CDXDedupeTotal = &CDXDedupeTotal
-	httpClient.DoppelgangerDedupeTotal = &DoppelgangerDedupeTotal
-	httpClient.LocalDedupeTotal = &LocalDedupeTotal
+	// Initialize stats registry
+	if HTTPClientSettings.StatsRegistry != nil {
+		httpClient.statsRegistry = HTTPClientSettings.StatsRegistry
+		HTTPClientSettings.RotatorSettings.StatsRegistry = HTTPClientSettings.StatsRegistry
+	} else {
+		localStatsRegistry := newLocalRegistry()
+		httpClient.statsRegistry = localStatsRegistry
+		HTTPClientSettings.RotatorSettings.StatsRegistry = localStatsRegistry
+	}
 
 	// Configure random local IP
 	httpClient.randomLocalIP = HTTPClientSettings.RandomLocalIP
