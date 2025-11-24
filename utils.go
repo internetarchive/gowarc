@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -230,4 +231,18 @@ func getContentLength(rwsc spooledtempfile.ReadWriteSeekCloser) int {
 
 		return int(fileInfo.Size())
 	}
+}
+
+func proxyName(u *url.URL) string {
+	// get domain and replace dots and colons with underscores
+	domain := strings.ReplaceAll(u.Hostname(), ".", "_")
+	domain = strings.ReplaceAll(domain, ":", "_")
+	// get port and replace colons with underscores
+	port := strings.ReplaceAll(u.Port(), ":", "_")
+	// if port is empty, set it to 80
+	if port == "" {
+		port = "80"
+	}
+	// return domain and port
+	return domain + "_" + port
 }

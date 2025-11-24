@@ -33,7 +33,27 @@ const (
 	// cdxDedupedTotal is the name of the metric that tracks the total records deduped using CDX.
 	cdxDedupedTotal     string = "cdx_deduped_total"
 	cdxDedupedTotalHelp string = "Total records deduped using CDX"
+
+	proxyPrefix         string = "proxy_"
+	proxyRequestsSuffix string = "_requests_total"
+	proxyRequestsHelp   string = "Total number of requests gone through this proxy"
+	proxyErrorsSuffix   string = "_errors_total"
+	proxyErrorsHelp     string = "Total number of errors occurred with this proxy"
+	proxyLastUsedSuffix string = "_last_used_nanoseconds"
+	proxyLastUsedHelp   string = "Last time this proxy was used in seconds (unix timestamp ns)"
 )
+
+func makeProxyRequestsMetricName(proxyName string) (string, string) {
+	return proxyPrefix + proxyName + proxyRequestsSuffix, proxyRequestsHelp
+}
+
+func makeProxyErrorsMetricName(proxyName string) (string, string) {
+	return proxyPrefix + proxyName + proxyErrorsSuffix, proxyErrorsHelp
+}
+
+func makeProxyLastUsedMetricName(proxyName string) (string, string) {
+	return proxyPrefix + proxyName + proxyLastUsedSuffix, proxyLastUsedHelp
+}
 
 // Counter represents a monotonically increasing metric.
 type Counter interface {

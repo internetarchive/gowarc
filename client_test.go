@@ -685,7 +685,13 @@ func TestHTTPClientWithProxy(t *testing.T) {
 	// init the HTTP client responsible for recording HTTP(s) requests / responses
 	httpClient, err := NewWARCWritingHTTPClient(HTTPClientSettings{
 		RotatorSettings: rotatorSettings,
-		Proxy:           fmt.Sprintf("socks5://%s", proxyAddr)})
+		Proxies: []ProxyConfig{
+			{
+				URL:     fmt.Sprintf("socks5://%s", proxyAddr),
+				Network: ProxyNetworkAny,
+				Type:    ProxyTypeAny,
+			},
+		}})
 	if err != nil {
 		t.Fatalf("Unable to init WARC writing HTTP client: %s", err)
 	}
