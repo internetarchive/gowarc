@@ -82,6 +82,7 @@ type HTTPClientSettings struct {
 	IPv6AnyIP             bool
 	DigestAlgorithm       DigestAlgorithm
 	StatsRegistry         StatsRegistry
+	LogBackend            LogBackend
 }
 
 type CustomHTTPClient struct {
@@ -109,6 +110,7 @@ type CustomHTTPClient struct {
 	randomLocalIP       bool
 
 	statsRegistry StatsRegistry
+	logBackend    LogBackend
 }
 
 func (c *CustomHTTPClient) Close() error {
@@ -150,6 +152,15 @@ func NewWARCWritingHTTPClient(HTTPClientSettings HTTPClientSettings) (httpClient
 		localStatsRegistry := newLocalRegistry()
 		httpClient.statsRegistry = localStatsRegistry
 		HTTPClientSettings.RotatorSettings.StatsRegistry = localStatsRegistry
+	}
+
+	// Initialize log backend
+	if HTTPClientSettings.LogBackend != nil {
+		httpClient.logBackend = HTTPClientSettings.LogBackend
+		HTTPClientSettings.RotatorSettings.LogBackend = HTTPClientSettings.LogBackend
+	} else {
+		httpClient.logBackend = &noopLogger{}
+		HTTPClientSettings.RotatorSettings.LogBackend = &noopLogger{}
 	}
 
 	// Configure random local IP

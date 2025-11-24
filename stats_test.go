@@ -448,10 +448,10 @@ func TestLabelsToString(t *testing.T) {
 // TestMakeMetricKey tests the makeMetricKey function
 func TestMakeMetricKey(t *testing.T) {
 	tests := []struct {
-		name     string
+		name       string
 		metricName string
-		labels   Labels
-		expected string
+		labels     Labels
+		expected   string
 	}{
 		{
 			name:       "no labels",

@@ -172,6 +172,7 @@ func TestProxySelection(t *testing.T) {
 	t.Run("NoProxies", func(t *testing.T) {
 		d := &customDialer{
 			proxyDialers: []proxyDialerInfo{},
+			logBackend:   &noopLogger{},
 		}
 		proxy, err := d.selectProxy(context.Background(), "tcp", "example.com:80")
 		if err != nil {
@@ -191,6 +192,7 @@ func TestProxySelection(t *testing.T) {
 					url:          "socks5://ipv4-proxy:1080",
 				},
 			},
+			logBackend: &noopLogger{},
 		}
 		proxy, err := d.selectProxy(context.Background(), "tcp4", "example.com:80")
 		if err != nil {
@@ -213,6 +215,7 @@ func TestProxySelection(t *testing.T) {
 					url:          "socks5://ipv4-proxy:1080",
 				},
 			},
+			logBackend:          &noopLogger{},
 			allowDirectFallback: true,
 		}
 		proxy, err := d.selectProxy(context.Background(), "tcp6", "example.com:80")
@@ -233,6 +236,7 @@ func TestProxySelection(t *testing.T) {
 					url:          "socks5://ipv6-proxy:1080",
 				},
 			},
+			logBackend: &noopLogger{},
 		}
 		proxy, err := d.selectProxy(context.Background(), "tcp6", "example.com:80")
 		if err != nil {
@@ -253,6 +257,7 @@ func TestProxySelection(t *testing.T) {
 					url:            "socks5://domain-proxy:1080",
 				},
 			},
+			logBackend: &noopLogger{},
 		}
 
 		// Should match subdomain
@@ -303,6 +308,7 @@ func TestProxySelection(t *testing.T) {
 					url:          "socks5://residential-proxy:1080",
 				},
 			},
+			logBackend: &noopLogger{},
 		}
 
 		// Without proxy type context, should use ProxyTypeAny proxy
@@ -354,6 +360,7 @@ func TestProxySelection(t *testing.T) {
 					url:          "socks5://proxy3:1080",
 				},
 			},
+			logBackend: &noopLogger{},
 		}
 
 		// Expected order for 3 complete cycles (9 selections)
@@ -392,6 +399,7 @@ func TestProxySelection(t *testing.T) {
 					url:          "socks5://ipv6-proxy:1080",
 				},
 			},
+			logBackend:          &noopLogger{},
 			allowDirectFallback: true,
 		}
 
@@ -414,6 +422,7 @@ func TestProxySelection(t *testing.T) {
 					url:          "socks5://ipv6-proxy:1080",
 				},
 			},
+			logBackend:          &noopLogger{},
 			allowDirectFallback: false,
 		}
 
@@ -453,6 +462,7 @@ func TestProxySelection(t *testing.T) {
 					url:          "socks5://residential-proxy:1080",
 				},
 			},
+			logBackend: &noopLogger{},
 		}
 
 		// Test IPv4 API domain
@@ -585,6 +595,7 @@ func TestProxyStatsRequestCount(t *testing.T) {
 				stats:        registry,
 			},
 		},
+		logBackend: &noopLogger{},
 	}
 
 	// Select proxies multiple times and verify request counts
@@ -625,6 +636,7 @@ func TestProxyStatsLastUsed(t *testing.T) {
 				stats:        registry,
 			},
 		},
+		logBackend: &noopLogger{},
 	}
 
 	// Record time before selection
@@ -686,6 +698,7 @@ func TestProxyStatsWithNilRegistry(t *testing.T) {
 				stats:        nil, // No stats registry
 			},
 		},
+		logBackend: &noopLogger{},
 	}
 
 	// Should not panic when stats is nil
@@ -726,6 +739,7 @@ func TestProxyStatsMultipleProxiesRoundRobin(t *testing.T) {
 				stats:        registry,
 			},
 		},
+		logBackend: &noopLogger{},
 	}
 
 	// Select proxies 12 times (4 complete round-robin cycles)
@@ -774,6 +788,7 @@ func TestProxyStatsWithDomainFiltering(t *testing.T) {
 				stats:          registry,
 			},
 		},
+		logBackend:          &noopLogger{},
 		allowDirectFallback: true,
 	}
 
@@ -828,6 +843,7 @@ func TestProxyStatsProxyTypeFiltering(t *testing.T) {
 				stats:        registry,
 			},
 		},
+		logBackend: &noopLogger{},
 	}
 
 	// Select mobile proxy

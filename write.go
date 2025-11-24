@@ -23,7 +23,8 @@ type Writer struct {
 	DigestAlgorithm DigestAlgorithm
 	ParallelGZIP    bool
 
-	stats StatsRegistry
+	stats      StatsRegistry
+	logBackend LogBackend
 }
 
 // RecordBatch is a structure that contains a bunch of
@@ -106,11 +107,13 @@ func (w *Writer) WriteRecord(r *Record) (recordID string, err error) {
 
 	r.Content.Seek(0, 0)
 	if written, err = io.Copy(w.FileWriter, r.Content); err != nil {
+		w.logBackend.Error("failed to write WARC record content", "file", w.FileName, "error", err)
 		return recordID, err
 	}
 
 	if written > 0 {
 		w.stats.RegisterCounter(totalDataWritten, totalDataWrittenHelp, nil).WithLabels(nil).Add(written)
+		w.logBackend.Debug("WARC record written", "file", w.FileName, "bytes", written, "recordID", recordID)
 	}
 
 	if _, err := io.WriteString(w.FileWriter, "\r\n\r\n"); err != nil {

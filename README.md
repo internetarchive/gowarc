@@ -209,6 +209,84 @@ counter.WithLabels(warc.Labels{"method": "POST", "status": "201"}).Add(5)
 
 **Interface Details**: See the complete interface contract in [`stats.go`](stats.go) for full implementation requirements.
 
+### Logging
+
+`gowarc` provides a `LogBackend` interface that allows you to integrate your logging solution (slog, zap, logrus, etc.). The library logs key events including connection establishment, DNS resolution, proxy selection, TLS handshakes, WARC file operations, and errors.
+
+#### Using the LogBackend Interface
+
+The `LogBackend` interface can be found in [`logging.go`](logging.go). The interface matches `slog.Logger` method signatures for easy integration:
+
+```go
+// Example: Wrapping slog.Logger to implement LogBackend
+type SlogAdapter struct {
+    logger *slog.Logger
+}
+
+func (s *SlogAdapter) Debug(msg string, args ...any) {
+    s.logger.Debug(msg, args...)
+}
+
+func (s *SlogAdapter) Info(msg string, args ...any) {
+    s.logger.Info(msg, args...)
+}
+
+func (s *SlogAdapter) Warn(msg string, args ...any) {
+    s.logger.Warn(msg, args...)
+}
+
+func (s *SlogAdapter) Error(msg string, args ...any) {
+    s.logger.Error(msg, args...)
+}
+
+func (s *SlogAdapter) Log(ctx context.Context, level slog.Level, msg string, args ...any) {
+    s.logger.Log(ctx, level, msg, args...)
+}
+
+// Configure with your logger
+handler := slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})
+logger := slog.New(handler)
+
+clientSettings := warc.HTTPClientSettings{
+    LogBackend: &SlogAdapter{logger: logger},
+    // ... other settings
+}
+```
+
+#### Log Events
+
+The library logs structured events with contextual key-value pairs:
+
+**Connection & Network:**
+- Proxy selection and connection status
+- Direct connection establishment
+- DNS resolution results and failures
+- TLS handshake success and failures
+
+**WARC Operations:**
+- WARC record writing and file rotation
+- Data written and compression events
+- File creation and closure
+
+**Errors:**
+- Connection failures (proxy and direct)
+- DNS resolution errors
+- TLS handshake failures
+- WARC write errors
+
+#### Log Levels
+
+- **Debug**: Verbose operational details (DNS lookups, successful connections, record writes)
+- **Info**: Important state changes (file rotation, new WARC files)
+- **Warn**: Recoverable issues and fallbacks
+- **Error**: Failures and exceptions (connection errors, DNS failures, write errors)
+
+Users control which log levels are recorded by configuring their logger implementation's level threshold.
+
+**Note**: The `LogBackend` interface is intended to eventually replace the `ErrChan` error reporting mechanism. For now, both are maintained for backward compatibility.
+
+**Interface Details**: See the complete interface contract in [`logging.go`](logging.go) for full implementation requirements.
+
 ## CLI Tools
 
 In addition to the Go library, gowarc provides several command-line utilities for working with WARC files:

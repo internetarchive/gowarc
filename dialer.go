@@ -112,7 +112,8 @@ type customDialer struct {
 	dnsConcurrency     int
 	dnsRoundRobinIndex atomic.Uint32
 
-	stats StatsRegistry
+	stats      StatsRegistry
+	logBackend LogBackend
 }
 
 var emptyPayloadDigests = []string{
@@ -126,6 +127,7 @@ func newCustomDialer(httpClient *CustomHTTPClient, proxies []ProxyConfig, allowD
 	d = new(customDialer)
 
 	d.stats = httpClient.statsRegistry
+	d.logBackend = httpClient.logBackend
 
 	d.Timeout = DialTimeout
 	d.client = httpClient
@@ -289,12 +291,14 @@ func (d *customDialer) selectProxy(ctx context.Context, network, address string)
 	// No eligible proxies found
 	if len(eligible) == 0 {
 		if d.allowDirectFallback {
+			d.logBackend.Debug("no eligible proxies found, using direct connection", "network", network, "address", address)
 			return nil, nil // Use direct connection
 		}
 		proxyTypeStr := "any"
 		if requestedProxyType != nil {
 			proxyTypeStr = fmt.Sprintf("%v", *requestedProxyType)
 		}
+		d.logBackend.Error("no eligible proxies found and direct fallback disabled", "network", network, "address", address, "proxyType", proxyTypeStr)
 		return nil, fmt.Errorf("no eligible proxies found for network=%s, address=%s, proxyType=%s and direct fallback is disabled", network, address, proxyTypeStr)
 	}
 
@@ -307,6 +311,8 @@ func (d *customDialer) selectProxy(ctx context.Context, network, address string)
 		selectedProxy.stats.RegisterCounter(proxyRequestsTotal, proxyRequestsTotalHelp, []string{"proxy"}).WithLabels(Labels{"proxy": selectedProxy.name}).Add(1)
 		selectedProxy.stats.RegisterGauge(proxyLastUsedNanoseconds, proxyLastUsedNanosecondsHelp, []string{"proxy"}).WithLabels(Labels{"proxy": selectedProxy.name}).Set(time.Now().UnixNano())
 	}
+
+	d.logBackend.Debug("proxy selected", "proxy", selectedProxy.name, "network", network, "address", address)
 
 	return selectedProxy, nil
 }
@@ -423,6 +429,7 @@ func (d *customDialer) CustomDialContext(ctx context.Context, network, address s
 		// Archive DNS and use resolved IP
 		IP, _, err = d.archiveDNS(ctx, address)
 		if err != nil {
+			d.logBackend.Error("DNS resolution failed", "address", address, "error", err)
 			return nil, err
 		}
 
@@ -434,12 +441,18 @@ func (d *customDialer) CustomDialContext(ctx context.Context, network, address s
 		}
 
 		dialAddr = net.JoinHostPort(IP.String(), port)
+		d.logBackend.Debug("DNS resolved", "address", address, "ip", IP.String())
 	}
 
 	if selectedProxy != nil {
 		conn, err = selectedProxy.dialer.DialContext(ctx, network, dialAddr)
-		if err != nil && selectedProxy.stats != nil {
-			selectedProxy.stats.RegisterCounter(proxyErrorsTotal, proxyErrorsTotalHelp, []string{"proxy"}).WithLabels(Labels{"proxy": selectedProxy.name}).Add(1)
+		if err != nil {
+			d.logBackend.Error("proxy connection failed", "proxy", selectedProxy.name, "address", dialAddr, "error", err)
+			if selectedProxy.stats != nil {
+				selectedProxy.stats.RegisterCounter(proxyErrorsTotal, proxyErrorsTotalHelp, []string{"proxy"}).WithLabels(Labels{"proxy": selectedProxy.name}).Add(1)
+			}
+		} else {
+			d.logBackend.Debug("connection established via proxy", "proxy", selectedProxy.name, "address", dialAddr)
 		}
 	} else {
 		if d.client.randomLocalIP {
@@ -455,6 +468,11 @@ func (d *customDialer) CustomDialContext(ctx context.Context, network, address s
 		}
 
 		conn, err = d.DialContext(ctx, network, dialAddr)
+		if err != nil {
+			d.logBackend.Error("direct connection failed", "address", dialAddr, "error", err)
+		} else {
+			d.logBackend.Debug("direct connection established", "address", dialAddr)
+		}
 	}
 
 	if err != nil {
@@ -496,6 +514,7 @@ func (d *customDialer) CustomDialTLSContext(ctx context.Context, network, addres
 		// Archive DNS and use resolved IP
 		IP, _, err = d.archiveDNS(ctx, address)
 		if err != nil {
+			d.logBackend.Error("DNS resolution failed for TLS connection", "address", address, "error", err)
 			return nil, err
 		}
 
@@ -507,6 +526,7 @@ func (d *customDialer) CustomDialTLSContext(ctx context.Context, network, addres
 		}
 
 		dialAddr = net.JoinHostPort(IP.String(), port)
+		d.logBackend.Debug("DNS resolved for TLS connection", "address", address, "ip", IP.String())
 	}
 
 	var plainConn net.Conn
@@ -552,14 +572,25 @@ func (d *customDialer) CustomDialTLSContext(ctx context.Context, network, addres
 
 	if err := tlsConn.HandshakeContext(handshakeCtx); err != nil {
 		// Track TLS handshake errors for proxy connections
-		if selectedProxy != nil && selectedProxy.stats != nil {
-			selectedProxy.stats.RegisterCounter(proxyErrorsTotal, proxyErrorsTotalHelp, []string{"proxy"}).WithLabels(Labels{"proxy": selectedProxy.name}).Add(1)
+		if selectedProxy != nil {
+			d.logBackend.Error("TLS handshake failed via proxy", "proxy", selectedProxy.name, "address", address, "error", err)
+			if selectedProxy.stats != nil {
+				selectedProxy.stats.RegisterCounter(proxyErrorsTotal, proxyErrorsTotalHelp, []string{"proxy"}).WithLabels(Labels{"proxy": selectedProxy.name}).Add(1)
+			}
+		} else {
+			d.logBackend.Error("TLS handshake failed", "address", address, "error", err)
 		}
 		closeErr := plainConn.Close()
 		if closeErr != nil {
 			return nil, fmt.Errorf("CustomDialTLS: TLS handshake failed and closing plain connection failed: %s", closeErr.Error())
 		}
 		return nil, fmt.Errorf("CustomDialTLS: TLS handshake failed: %w", err)
+	}
+
+	if selectedProxy != nil {
+		d.logBackend.Debug("TLS connection established via proxy", "proxy", selectedProxy.name, "address", address)
+	} else {
+		d.logBackend.Debug("TLS connection established", "address", address)
 	}
 
 	return d.wrapConnection(ctx, tlsConn, "https"), nil
