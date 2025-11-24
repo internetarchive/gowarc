@@ -38,16 +38,16 @@ const (
 	cdxDedupedTotalHelp string = "Total records deduped using CDX"
 
 	// proxyRequestsTotal is the name of the metric that tracks the total number of requests gone through a proxy.
-	proxyRequestsTotal string = "proxy_requests_total"
-	proxyRequestsHelp  string = "Total number of requests gone through a proxy"
+	proxyRequestsTotal     string = "proxy_requests_total"
+	proxyRequestsTotalHelp string = "Total number of requests gone through a proxy"
 
 	// proxyErrorsTotal is the name of the metric that tracks the total number of errors occurred with a proxy.
-	proxyErrorsTotal string = "proxy_errors_total"
-	proxyErrorsHelp  string = "Total number of errors occurred with a proxy"
+	proxyErrorsTotal     string = "proxy_errors_total"
+	proxyErrorsTotalHelp string = "Total number of errors occurred with a proxy"
 
-	// proxyLastUsedTotal is the name of the metric that tracks the last time a proxy was used.
-	proxyLastUsedTotal string = "proxy_last_used_nanoseconds"
-	proxyLastUsedHelp  string = "Last time a proxy was used in seconds (unix timestamp ns)"
+	// proxyLastUsedNanoseconds is the name of the metric that tracks the last time a proxy was used.
+	proxyLastUsedNanoseconds     string = "proxy_last_used_nanoseconds"
+	proxyLastUsedNanosecondsHelp string = "Last time a proxy was used in seconds (unix timestamp ns)"
 )
 
 // Labels represents Prometheus-style label values as key-value pairs.

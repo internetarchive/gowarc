@@ -304,8 +304,8 @@ func (d *customDialer) selectProxy(ctx context.Context, network, address string)
 
 	// Update proxy statistics
 	if selectedProxy.stats != nil {
-		selectedProxy.stats.RegisterCounter(proxyRequestsTotal, proxyRequestsHelp, []string{"proxy"}).WithLabels(Labels{"proxy": selectedProxy.name}).Add(1)
-		selectedProxy.stats.RegisterGauge(proxyLastUsedTotal, proxyLastUsedHelp, []string{"proxy"}).WithLabels(Labels{"proxy": selectedProxy.name}).Set(time.Now().UnixNano())
+		selectedProxy.stats.RegisterCounter(proxyRequestsTotal, proxyRequestsTotalHelp, []string{"proxy"}).WithLabels(Labels{"proxy": selectedProxy.name}).Add(1)
+		selectedProxy.stats.RegisterGauge(proxyLastUsedNanoseconds, proxyLastUsedNanosecondsHelp, []string{"proxy"}).WithLabels(Labels{"proxy": selectedProxy.name}).Set(time.Now().UnixNano())
 	}
 
 	return selectedProxy, nil
@@ -439,7 +439,7 @@ func (d *customDialer) CustomDialContext(ctx context.Context, network, address s
 	if selectedProxy != nil {
 		conn, err = selectedProxy.dialer.DialContext(ctx, network, dialAddr)
 		if err != nil && selectedProxy.stats != nil {
-			selectedProxy.stats.RegisterCounter(proxyErrorsTotal, proxyErrorsHelp, []string{"proxy"}).WithLabels(Labels{"proxy": selectedProxy.name}).Add(1)
+			selectedProxy.stats.RegisterCounter(proxyErrorsTotal, proxyErrorsTotalHelp, []string{"proxy"}).WithLabels(Labels{"proxy": selectedProxy.name}).Add(1)
 		}
 	} else {
 		if d.client.randomLocalIP {
@@ -514,7 +514,7 @@ func (d *customDialer) CustomDialTLSContext(ctx context.Context, network, addres
 	if selectedProxy != nil {
 		plainConn, err = selectedProxy.dialer.DialContext(ctx, network, dialAddr)
 		if err != nil && selectedProxy.stats != nil {
-			selectedProxy.stats.RegisterCounter(proxyErrorsTotal, proxyErrorsHelp, []string{"proxy"}).WithLabels(Labels{"proxy": selectedProxy.name}).Add(1)
+			selectedProxy.stats.RegisterCounter(proxyErrorsTotal, proxyErrorsTotalHelp, []string{"proxy"}).WithLabels(Labels{"proxy": selectedProxy.name}).Add(1)
 		}
 	} else {
 		if d.client.randomLocalIP {
@@ -553,7 +553,7 @@ func (d *customDialer) CustomDialTLSContext(ctx context.Context, network, addres
 	if err := tlsConn.HandshakeContext(handshakeCtx); err != nil {
 		// Track TLS handshake errors for proxy connections
 		if selectedProxy != nil && selectedProxy.stats != nil {
-			selectedProxy.stats.RegisterCounter(proxyErrorsTotal, proxyErrorsHelp, []string{"proxy"}).WithLabels(Labels{"proxy": selectedProxy.name}).Add(1)
+			selectedProxy.stats.RegisterCounter(proxyErrorsTotal, proxyErrorsTotalHelp, []string{"proxy"}).WithLabels(Labels{"proxy": selectedProxy.name}).Add(1)
 		}
 		closeErr := plainConn.Close()
 		if closeErr != nil {

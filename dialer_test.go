@@ -522,9 +522,9 @@ func TestProxyStatsMetricNames(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Register counters for this proxy using labels
-			requestsCounter := registry.RegisterCounter(proxyRequestsTotal, proxyRequestsHelp, []string{"proxy"}).WithLabels(Labels{"proxy": tt.proxyName})
-			errorsCounter := registry.RegisterCounter(proxyErrorsTotal, proxyErrorsHelp, []string{"proxy"}).WithLabels(Labels{"proxy": tt.proxyName})
-			lastUsedGauge := registry.RegisterGauge(proxyLastUsedTotal, proxyLastUsedHelp, []string{"proxy"}).WithLabels(Labels{"proxy": tt.proxyName})
+			requestsCounter := registry.RegisterCounter(proxyRequestsTotal, proxyRequestsTotalHelp, []string{"proxy"}).WithLabels(Labels{"proxy": tt.proxyName})
+			errorsCounter := registry.RegisterCounter(proxyErrorsTotal, proxyErrorsTotalHelp, []string{"proxy"}).WithLabels(Labels{"proxy": tt.proxyName})
+			lastUsedGauge := registry.RegisterGauge(proxyLastUsedNanoseconds, proxyLastUsedNanosecondsHelp, []string{"proxy"}).WithLabels(Labels{"proxy": tt.proxyName})
 
 			// Verify counters start at 0
 			if requestsCounter.Get() != 0 {
@@ -553,8 +553,8 @@ func TestProxyStatsMetricNames(t *testing.T) {
 	}
 
 	// Verify that different proxy labels create independent counters
-	proxy1Counter := registry.RegisterCounter(proxyRequestsTotal, proxyRequestsHelp, []string{"proxy"}).WithLabels(Labels{"proxy": "example_com_8080"})
-	proxy2Counter := registry.RegisterCounter(proxyRequestsTotal, proxyRequestsHelp, []string{"proxy"}).WithLabels(Labels{"proxy": "192_168_1_1_3128"})
+	proxy1Counter := registry.RegisterCounter(proxyRequestsTotal, proxyRequestsTotalHelp, []string{"proxy"}).WithLabels(Labels{"proxy": "example_com_8080"})
+	proxy2Counter := registry.RegisterCounter(proxyRequestsTotal, proxyRequestsTotalHelp, []string{"proxy"}).WithLabels(Labels{"proxy": "192_168_1_1_3128"})
 
 	if proxy1Counter.Get() != 5 {
 		t.Errorf("Expected proxy1 counter to be 5 (from earlier test), got %d", proxy1Counter.Get())
@@ -600,8 +600,8 @@ func TestProxyStatsRequestCount(t *testing.T) {
 
 	// Verify both proxies were used (round-robin)
 	// With 5 selections: proxy1 should be used 3 times, proxy2 should be used 2 times
-	proxy1Counter := registry.RegisterCounter(proxyRequestsTotal, proxyRequestsHelp, []string{"proxy"}).WithLabels(Labels{"proxy": "proxy1_1080"})
-	proxy2Counter := registry.RegisterCounter(proxyRequestsTotal, proxyRequestsHelp, []string{"proxy"}).WithLabels(Labels{"proxy": "proxy2_1080"})
+	proxy1Counter := registry.RegisterCounter(proxyRequestsTotal, proxyRequestsTotalHelp, []string{"proxy"}).WithLabels(Labels{"proxy": "proxy1_1080"})
+	proxy2Counter := registry.RegisterCounter(proxyRequestsTotal, proxyRequestsTotalHelp, []string{"proxy"}).WithLabels(Labels{"proxy": "proxy2_1080"})
 
 	if proxy1Counter.Get() != 3 {
 		t.Errorf("Expected proxy1 request count 3, got %d", proxy1Counter.Get())
@@ -643,7 +643,7 @@ func TestProxyStatsLastUsed(t *testing.T) {
 	timeAfter := time.Now().UnixNano()
 
 	// Verify last used timestamp is within expected range
-	lastUsedGauge := registry.RegisterGauge(proxyLastUsedTotal, proxyLastUsedHelp, []string{"proxy"}).WithLabels(Labels{"proxy": "proxy_1080"})
+	lastUsedGauge := registry.RegisterGauge(proxyLastUsedNanoseconds, proxyLastUsedNanosecondsHelp, []string{"proxy"}).WithLabels(Labels{"proxy": "proxy_1080"})
 	lastUsed := lastUsedGauge.Get()
 
 	if lastUsed < timeBefore || lastUsed > timeAfter {
@@ -742,7 +742,7 @@ func TestProxyStatsMultipleProxiesRoundRobin(t *testing.T) {
 	// Verify each proxy was used exactly 4 times
 	for i := 1; i <= 3; i++ {
 		proxyName := "proxy" + string(rune('0'+i))
-		counter := registry.RegisterCounter(proxyRequestsTotal, proxyRequestsHelp, []string{"proxy"}).WithLabels(Labels{"proxy": proxyName})
+		counter := registry.RegisterCounter(proxyRequestsTotal, proxyRequestsTotalHelp, []string{"proxy"}).WithLabels(Labels{"proxy": proxyName})
 
 		expectedCount := int64(4)
 		if counter.Get() != expectedCount {
@@ -796,8 +796,8 @@ func TestProxyStatsWithDomainFiltering(t *testing.T) {
 	}
 
 	// Verify stats
-	exampleCounter := registry.RegisterCounter(proxyRequestsTotal, proxyRequestsHelp, []string{"proxy"}).WithLabels(Labels{"proxy": "example_proxy"})
-	testCounter := registry.RegisterCounter(proxyRequestsTotal, proxyRequestsHelp, []string{"proxy"}).WithLabels(Labels{"proxy": "test_proxy"})
+	exampleCounter := registry.RegisterCounter(proxyRequestsTotal, proxyRequestsTotalHelp, []string{"proxy"}).WithLabels(Labels{"proxy": "example_proxy"})
+	testCounter := registry.RegisterCounter(proxyRequestsTotal, proxyRequestsTotalHelp, []string{"proxy"}).WithLabels(Labels{"proxy": "test_proxy"})
 
 	if exampleCounter.Get() != 1 {
 		t.Errorf("Expected example_proxy request count 1, got %d", exampleCounter.Get())
@@ -851,8 +851,8 @@ func TestProxyStatsProxyTypeFiltering(t *testing.T) {
 	}
 
 	// Verify stats
-	mobileCounter := registry.RegisterCounter(proxyRequestsTotal, proxyRequestsHelp, []string{"proxy"}).WithLabels(Labels{"proxy": "mobile_proxy"})
-	residentialCounter := registry.RegisterCounter(proxyRequestsTotal, proxyRequestsHelp, []string{"proxy"}).WithLabels(Labels{"proxy": "residential_proxy"})
+	mobileCounter := registry.RegisterCounter(proxyRequestsTotal, proxyRequestsTotalHelp, []string{"proxy"}).WithLabels(Labels{"proxy": "mobile_proxy"})
+	residentialCounter := registry.RegisterCounter(proxyRequestsTotal, proxyRequestsTotalHelp, []string{"proxy"}).WithLabels(Labels{"proxy": "residential_proxy"})
 
 	if mobileCounter.Get() != 1 {
 		t.Errorf("Expected mobile_proxy request count 1, got %d", mobileCounter.Get())
