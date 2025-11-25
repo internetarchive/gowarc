@@ -1,0 +1,639 @@
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                      GOWARC LIBRARY - QUICK REFERENCE                           │
+│                     Complete HTTPS Request Flow Example                         │
+│                  (IPv6 Residential Proxy → WARC File)                          │
+└─────────────────────────────────────────────────────────────────────────────────┘
+
+═══════════════════════════════════════════════════════════════════════════════════
+PHASE 1: REQUEST INITIATION
+═══════════════════════════════════════════════════════════════════════════════════
+
+┌────────────────┐
+│  Application   │
+│                │  req := http.NewRequest("GET", "https://example.com/page", nil)
+│                │  resp, err := client.Do(req)
+└───────┬────────┘
+        │
+        ▼
+┌────────────────────────┐
+│  CustomHTTPClient      │
+│  - http.Client wrapper │
+│  - Dedup hash table    │  Add "Accept-Encoding: gzip"
+│  - WARC writer channel │  Force compression
+└───────┬────────────────┘
+        │
+        ▼
+┌────────────────────────┐
+│  customTransport       │
+│  - RoundTrip()         │  Intercept request
+│  - Decompress response │  Delegate to http.Transport
+└───────┬────────────────┘
+        │
+        ▼
+
+═══════════════════════════════════════════════════════════════════════════════════
+PHASE 2: PROXY SELECTION & DNS
+═══════════════════════════════════════════════════════════════════════════════════
+
+┌────────────────────────────────────────────────────────────────────┐
+│  customDialer                                                      │
+│                                                                    │
+│  Step 1: Network Type Selection                                   │
+│  ┌──────────────────────────────────────────────────────────────┐ │
+│  │ getNetworkType("tcp")                                        │ │
+│  │ - disableIPv4=true, disableIPv6=false                        │ │
+│  │ → Returns "tcp6" (force IPv6)                                │ │
+│  └──────────────────────────────────────────────────────────────┘ │
+│                                                                    │
+│  Step 2: Proxy Selection                                          │
+│  ┌──────────────────────────────────────────────────────────────┐ │
+│  │ selectProxy(ctx, "tcp6", "example.com:443")                  │ │
+│  │                                                              │ │
+│  │ Configured proxies:                                          │ │
+│  │ ├─ socks5://proxy.datacenter.net     [Type=Datacenter]      │ │
+│  │ ├─ socks5://proxy.residential.net    [Type=Residential] ✓   │ │
+│  │ └─ socks5://proxy.ipv4only.net       [Network=IPv4]         │ │
+│  │                                                              │ │
+│  │ Filter 1: ProxyType                                          │ │
+│  │   Context requests Residential → Keep only Residential       │ │
+│  │   ✓ proxy.residential.net                                    │ │
+│  │   ✗ proxy.datacenter.net                                     │ │
+│  │                                                              │ │
+│  │ Filter 2: Network (IPv6 needed)                              │ │
+│  │   ✓ proxy.residential.net (Network=Any)                      │ │
+│  │   ✗ proxy.ipv4only.net (Network=IPv4)                        │ │
+│  │                                                              │ │
+│  │ Filter 3: Domain (example.com)                               │ │
+│  │   ✓ AllowedDomains: ["*.example.com"] matches                │ │
+│  │                                                              │ │
+│  │ Round-robin: Select from 1 eligible proxy                    │ │
+│  │ → Selected: proxy.residential.net:1080                       │ │
+│  │                                                              │ │
+│  │ Metrics:                                                     │ │
+│  │   proxy_requests_total{proxy="proxy.residential.net"} += 1  │ │
+│  │   proxy_last_used_nanoseconds{proxy="..."} = now()          │ │
+│  └──────────────────────────────────────────────────────────────┘ │
+│                                                                    │
+│  Step 3: DNS Resolution                                            │
+│  ┌──────────────────────────────────────────────────────────────┐ │
+│  │ Proxy scheme: socks5h → REMOTE DNS                           │ │
+│  │ Skip local DNS, send hostname to proxy                       │ │
+│  │ (Proxy will resolve "example.com" on its network)            │ │
+│  └──────────────────────────────────────────────────────────────┘ │
+└────────────────────────────────────────────────────────────────────┘
+        │
+        ▼
+
+═══════════════════════════════════════════════════════════════════════════════════
+PHASE 3: CONNECTION ESTABLISHMENT
+═══════════════════════════════════════════════════════════════════════════════════
+
+┌────────────────────────────────────────────────────────────────────┐
+│  Connect to Proxy                                                  │
+│                                                                    │
+│  proxyDialer.DialContext(ctx, "tcp6", "example.com:443")          │
+│                                                                    │
+│  SOCKS5 Handshake:                                                 │
+│  ────────────────────────────────────────────────────────────────  │
+│  Client → Proxy:  [0x05, 0x01, 0x00]  (version, methods)          │
+│  Proxy → Client:  [0x05, 0x00]        (accepted)                  │
+│  Client → Proxy:  [0x05, 0x01, 0x00, 0x03, "example.com", 443]    │
+│                   (CONNECT to domain)                              │
+│  Proxy → Client:  [0x05, 0x00, ...]   (success)                   │
+│                                                                    │
+│  → Plain TCP connection ready                                     │
+└───────┬────────────────────────────────────────────────────────────┘
+        │
+        ▼
+┌────────────────────────────────────────────────────────────────────┐
+│  TLS Handshake                                                     │
+│                                                                    │
+│  tlsConn = utls.UClient(plainConn, tlsConfig)                     │
+│  tlsConn.ApplyPreset(HelloChrome_120)  // Browser fingerprinting  │
+│  err = tlsConn.HandshakeContext(ctx, 10s timeout)                 │
+│                                                                    │
+│  TLS 1.3 Handshake:                                                │
+│  ────────────────────────────────────────────────────────────────  │
+│  ClientHello → [via proxy] → Server                               │
+│  ServerHello ← [via proxy] ← Server                               │
+│  Certificate ← [via proxy] ← Server                               │
+│  ... (standard TLS 1.3 handshake)                                  │
+│                                                                    │
+│  → Encrypted TLS connection ready                                 │
+│                                                                    │
+│  Log: "TLS connection established via proxy"                      │
+└───────┬────────────────────────────────────────────────────────────┘
+        │
+        ▼
+
+═══════════════════════════════════════════════════════════════════════════════════
+PHASE 4: CONNECTION WRAPPING FOR CAPTURE
+═══════════════════════════════════════════════════════════════════════════════════
+
+┌────────────────────────────────────────────────────────────────────┐
+│  wrapConnection(ctx, tlsConn, "https")                             │
+│                                                                    │
+│  Create bidirectional capture pipes:                               │
+│  ┌──────────────────────────────────────────────────────────────┐ │
+│  │ reqReader, reqWriter := io.Pipe()      // Request capture   │ │
+│  │ respReader, respWriter := io.Pipe()    // Response capture  │ │
+│  └──────────────────────────────────────────────────────────────┘ │
+│                                                                    │
+│  Launch WARC recording goroutine:                                  │
+│  ┌──────────────────────────────────────────────────────────────┐ │
+│  │ go writeWARCFromConnection(                                  │ │
+│  │     ctx, reqReader, respReader, "https", tlsConn)            │ │
+│  │                                                              │ │
+│  │ This goroutine will:                                         │ │
+│  │ 1. Read HTTP request from reqReader pipe                    │ │
+│  │ 2. Read HTTP response from respReader pipe                  │ │
+│  │ 3. Parse both into WARC records                             │ │
+│  │ 4. Send to WARC writer channel                              │ │
+│  └──────────────────────────────────────────────────────────────┘ │
+│                                                                    │
+│  Create CustomConnection:                                          │
+│  ┌──────────────────────────────────────────────────────────────┐ │
+│  │ CustomConnection {                                           │ │
+│  │   Conn:   tlsConn,                                           │ │
+│  │   Reader: io.TeeReader(tlsConn, respWriter),                 │ │
+│  │           └─> Splits reads: app + pipe                       │ │
+│  │   Writer: io.MultiWriter(reqWriter, tlsConn),                │ │
+│  │           └─> Duplicates writes: pipe + network              │ │
+│  │ }                                                            │ │
+│  └──────────────────────────────────────────────────────────────┘ │
+│                                                                    │
+│  Data Flow Visualization:                                          │
+│                                                                    │
+│  Application WRITE (HTTP Request):                                 │
+│  ────────────────────────────────────────────────────────────────  │
+│        App                                                         │
+│         │                                                          │
+│         ▼                                                          │
+│    MultiWriter                                                     │
+│      ├──────────────────┬─────────────────┐                        │
+│      │                  │                 │                        │
+│      ▼                  ▼                 ▼                        │
+│  reqWriter (pipe)   tlsConn         To WARC Goroutine             │
+│                         │                                          │
+│                         ▼                                          │
+│                      Proxy → Server                                │
+│                                                                    │
+│  Server RESPONSE:                                                  │
+│  ────────────────────────────────────────────────────────────────  │
+│   Server → Proxy                                                   │
+│                │                                                   │
+│                ▼                                                   │
+│            tlsConn                                                 │
+│                │                                                   │
+│                ▼                                                   │
+│          TeeReader                                                 │
+│         ├────────────────┬────────────────┐                        │
+│         │                │                │                        │
+│         ▼                ▼                ▼                        │
+│       App           respWriter       To WARC Goroutine             │
+│                       (pipe)                                       │
+│                                                                    │
+└───────┬────────────────────────────────────────────────────────────┘
+        │
+        ▼
+
+═══════════════════════════════════════════════════════════════════════════════════
+PHASE 5: HTTP REQUEST/RESPONSE (Application Layer)
+═══════════════════════════════════════════════════════════════════════════════════
+
+┌────────────────────────────────────────────────────────────────────┐
+│  Application writes HTTP request                                   │
+│  ────────────────────────────────────────────────────────────────  │
+│  GET /page HTTP/1.1                                                │
+│  Host: example.com                                                 │
+│  User-Agent: ...                                                   │
+│  Accept-Encoding: gzip                                             │
+│  [empty line]                                                      │
+│                                                                    │
+│  → Bytes flow through MultiWriter to BOTH:                        │
+│     1. Real TLS connection (to server)                             │
+│     2. reqWriter pipe (to WARC goroutine)                         │
+└────────────────────────────────────────────────────────────────────┘
+        │
+        ▼
+┌────────────────────────────────────────────────────────────────────┐
+│  Server sends HTTP response                                        │
+│  ────────────────────────────────────────────────────────────────  │
+│  HTTP/1.1 200 OK                                                   │
+│  Content-Type: text/html                                           │
+│  Content-Encoding: gzip                                            │
+│  Content-Length: 5432                                              │
+│  [empty line]                                                      │
+│  [gzipped HTML body]                                               │
+│                                                                    │
+│  → Bytes flow through TeeReader to BOTH:                          │
+│     1. Application (io.Copy to destination)                        │
+│     2. respWriter pipe (to WARC goroutine)                        │
+└────────────────────────────────────────────────────────────────────┘
+
+═══════════════════════════════════════════════════════════════════════════════════
+PHASE 6: WARC RECORD CREATION (Background Goroutines)
+═══════════════════════════════════════════════════════════════════════════════════
+
+┌────────────────────────────────────────────────────────────────────┐
+│  writeWARCFromConnection Goroutine                                 │
+│                                                                    │
+│  Spawns 2 sub-goroutines:                                          │
+│                                                                    │
+│  ┌──────────────────────────────────────────────────────────────┐ │
+│  │ [1] readRequest(reqReader)                                   │ │
+│  │                                                              │ │
+│  │ • Create Record with SpooledTempFile                         │ │
+│  │ • io.Copy all bytes from reqReader → Record.Content          │ │
+│  │ • Parse HTTP request (http.ReadRequest)                      │ │
+│  │ • Extract:                                                   │ │
+│  │   - Request line: "GET /page HTTP/1.1"                       │ │
+│  │   - Host header: "example.com"                               │ │
+│  │   - Construct URI: "https://example.com/page"                │ │
+│  │ • Send targetURI → response goroutine (via channel)          │ │
+│  │ • Set WARC headers:                                          │ │
+│  │   - WARC-Type: request                                       │ │
+│  │   - WARC-Target-URI: https://example.com/page                │ │
+│  │   - Content-Type: application/http;msgtype=request           │ │
+│  │ • Send record → batch assembler (via channel)                │ │
+│  └──────────────────────────────────────────────────────────────┘ │
+│                                                                    │
+│  ┌──────────────────────────────────────────────────────────────┐ │
+│  │ [2] readResponse(respReader)                                 │ │
+│  │                                                              │ │
+│  │ • Receive targetURI from request goroutine                   │ │
+│  │ • Create Record with SpooledTempFile                         │ │
+│  │ • io.Copy all bytes from respReader → Record.Content         │ │
+│  │ • Parse HTTP response (http.ReadResponse)                    │ │
+│  │ • Check DiscardHook(response):                               │ │
+│  │   - Can filter by status code, headers, etc.                 │ │
+│  │   - Example: Discard 429 rate limit responses                │ │
+│  │ • Calculate payload digest:                                  │ │
+│  │   - Skip HTTP headers                                        │ │
+│  │   - SHA1 hash of response body                               │ │
+│  │   - Result: "sha1:ABC123..."                                 │ │
+│  │ • Set WARC-Payload-Digest header                             │ │
+│  │ • Send record → batch assembler (via channel)                │ │
+│  └──────────────────────────────────────────────────────────────┘ │
+│                                                                    │
+│  Wait for both goroutines to complete                              │
+│  Assemble RecordBatch                                              │
+└───────┬────────────────────────────────────────────────────────────┘
+        │
+        ▼
+
+═══════════════════════════════════════════════════════════════════════════════════
+PHASE 7: DEDUPLICATION
+═══════════════════════════════════════════════════════════════════════════════════
+
+┌────────────────────────────────────────────────────────────────────┐
+│  Deduplication Check                                               │
+│                                                                    │
+│  payloadDigest = "sha1:ABC123..."                                  │
+│                                                                    │
+│  Step 1: Local Deduplication                                       │
+│  ┌──────────────────────────────────────────────────────────────┐ │
+│  │ existing, found := dedupeHashTable.Load(payloadDigest)       │ │
+│  │                                                              │ │
+│  │ if found {                                                   │ │
+│  │   // Payload seen before in this session                    │ │
+│  │   Convert to REVISIT record:                                │ │
+│  │     WARC-Type: revisit                                       │ │
+│  │     WARC-Refers-To: <urn:uuid:original-record-id>           │ │
+│  │     WARC-Refers-To-Target-URI: https://...                  │ │
+│  │     WARC-Refers-To-Date: 2025-01-25T12:30:00Z               │ │
+│  │     WARC-Truncated: length                                  │ │
+│  │     Content: [HTTP headers only, body removed]              │ │
+│  │                                                              │ │
+│  │   Metrics:                                                   │ │
+│  │     local_deduped_total += 1                                │ │
+│  │     local_deduped_bytes_total += original_size              │ │
+│  │                                                              │ │
+│  │   → Skip external checks                                    │ │
+│  │ }                                                            │ │
+│  └──────────────────────────────────────────────────────────────┘ │
+│                                                                    │
+│  Step 2: Doppelganger API (if configured)                          │
+│  ┌──────────────────────────────────────────────────────────────┐ │
+│  │ if DoppelgangerHost != "" && !foundLocally {                 │ │
+│  │   url := DoppelgangerHost + "/api/records/" +                │ │
+│  │          payloadDigest + "?uri=" + targetURI                 │ │
+│  │                                                              │ │
+│  │   resp := http.Get(url)                                      │ │
+│  │   if resp.StatusCode == 200 {                                │ │
+│  │     // Found in external service                            │ │
+│  │     Parse: {"id": "...", "uri": "...", "date": "..."}       │ │
+│  │     Convert to REVISIT record                               │ │
+│  │                                                              │ │
+│  │     Metrics:                                                 │ │
+│  │       doppelganger_deduped_total += 1                       │ │
+│  │       doppelganger_deduped_bytes_total += size              │ │
+│  │   }                                                          │ │
+│  │ }                                                            │ │
+│  └──────────────────────────────────────────────────────────────┘ │
+│                                                                    │
+│  Step 3: CDX API (if configured)                                   │
+│  ┌──────────────────────────────────────────────────────────────┐ │
+│  │ if CDXDedupeServer != "" && !foundYet {                      │ │
+│  │   url := CDXDedupeServer + "/web/timemap/cdx?" +             │ │
+│  │          "url=" + targetURI + "&limit=-1"                    │ │
+│  │                                                              │ │
+│  │   resp := http.Get(url)                                      │ │
+│  │   Parse CDX line: "com,example)/page 20250101... sha1:..."  │ │
+│  │                                                              │ │
+│  │   if digest matches payloadDigest {                          │ │
+│  │     Convert to REVISIT record                               │ │
+│  │                                                              │ │
+│  │     Metrics:                                                 │ │
+│  │       cdx_deduped_total += 1                                │ │
+│  │       cdx_deduped_bytes_total += size                       │ │
+│  │   }                                                          │ │
+│  │ }                                                            │ │
+│  └──────────────────────────────────────────────────────────────┘ │
+│                                                                    │
+│  If NOT found anywhere:                                            │
+│  ┌──────────────────────────────────────────────────────────────┐ │
+│  │ Store full response record                                   │ │
+│  │ Add to dedupeHashTable for future local checks:              │ │
+│  │   Key: payloadDigest                                         │ │
+│  │   Value: {recordID, targetURI, date, size}                   │ │
+│  └──────────────────────────────────────────────────────────────┘ │
+└───────┬────────────────────────────────────────────────────────────┘
+        │
+        ▼
+
+═══════════════════════════════════════════════════════════════════════════════════
+PHASE 8: BATCH FINALIZATION
+═══════════════════════════════════════════════════════════════════════════════════
+
+┌────────────────────────────────────────────────────────────────────┐
+│  RecordBatch Assembly                                              │
+│                                                                    │
+│  batch := &RecordBatch{                                            │
+│    Records: [requestRecord, responseRecord],                       │
+│    CaptureTime: time.Now().UTC().Format(RFC3339Nano),             │
+│    FeedbackChan: nil,  // or user-provided channel for sync       │
+│  }                                                                 │
+│                                                                    │
+│  Generate UUIDs:                                                   │
+│  ────────────────────────────────────────────────────────────────  │
+│  reqUUID  = "550e8400-e29b-41d4-a716-446655440000"                 │
+│  respUUID = "6ba7b810-9dad-11d1-80b4-00c04fd430c8"                 │
+│                                                                    │
+│  Set Record IDs:                                                   │
+│  ────────────────────────────────────────────────────────────────  │
+│  requestRecord.Header["WARC-Record-ID"] =                          │
+│      "<urn:uuid:550e8400-e29b-41d4-a716-446655440000>"             │
+│  responseRecord.Header["WARC-Record-ID"] =                         │
+│      "<urn:uuid:6ba7b810-9dad-11d1-80b4-00c04fd430c8>"             │
+│                                                                    │
+│  Cross-reference records:                                          │
+│  ────────────────────────────────────────────────────────────────  │
+│  requestRecord.Header["WARC-Concurrent-To"] =                      │
+│      "<urn:uuid:6ba7b810-9dad-11d1-80b4-00c04fd430c8>"             │
+│  responseRecord.Header["WARC-Concurrent-To"] =                     │
+│      "<urn:uuid:550e8400-e29b-41d4-a716-446655440000>"             │
+│                                                                    │
+│  Set Target URI:                                                   │
+│  ────────────────────────────────────────────────────────────────  │
+│  requestRecord.Header["WARC-Target-URI"] =                         │
+│      "https://example.com/page"                                    │
+│  responseRecord.Header["WARC-Target-URI"] =                        │
+│      "https://example.com/page"                                    │
+│                                                                    │
+│  IP Address (skipped when using proxy):                            │
+│  ────────────────────────────────────────────────────────────────  │
+│  // WARC-IP-Address NOT set                                       │
+│  // (We connected via proxy, don't know real server IP)            │
+│                                                                    │
+│  Calculate Block Digest:                                           │
+│  ────────────────────────────────────────────────────────────────  │
+│  blockDigest = SHA1(entire record content including headers)       │
+│  responseRecord.Header["WARC-Block-Digest"] = blockDigest          │
+│                                                                    │
+│  Send to WARC writer:                                              │
+│  ────────────────────────────────────────────────────────────────  │
+│  client.WARCWriter <- batch                                        │
+│                                                                    │
+│  (Optional) Wait for write confirmation:                           │
+│  ────────────────────────────────────────────────────────────────  │
+│  if batch.FeedbackChan != nil {                                    │
+│    <-batch.FeedbackChan  // Block until written                   │
+│  }                                                                 │
+└───────┬────────────────────────────────────────────────────────────┘
+        │
+        ▼
+
+═══════════════════════════════════════════════════════════════════════════════════
+PHASE 9: WARC FILE WRITING
+═══════════════════════════════════════════════════════════════════════════════════
+
+┌────────────────────────────────────────────────────────────────────┐
+│  recordWriter Goroutine (one of pool)                              │
+│                                                                    │
+│  Current state:                                                    │
+│    currentFile = "WARC-20250125122030-00001-hostname.warc.gz.open"│
+│    currentSize = 45.2 MB                                           │
+│    sizeLimit   = 100 MB                                            │
+│                                                                    │
+│  for batch := range WARCWriter {                                   │
+│                                                                    │
+│    ┌────────────────────────────────────────────────────────────┐ │
+│    │ Check file size                                            │ │
+│    │ if currentSize >= sizeLimit {                              │ │
+│    │   // Rotate to new file                                   │ │
+│    │   1. Flush all buffers                                    │ │
+│    │   2. Close GZIP writer                                    │ │
+│    │   3. Close file                                           │ │
+│    │   4. Rename: remove ".open" suffix                        │ │
+│    │      "...-00001.warc.gz.open" → "...-00001.warc.gz"       │ │
+│    │   5. Increment serial: 00002                              │ │
+│    │   6. Create new file with ".open" suffix                  │ │
+│    │   7. Write warcinfo record to new file                    │ │
+│    │   8. Log: "WARC file rotation"                            │ │
+│    │ }                                                          │ │
+│    └────────────────────────────────────────────────────────────┘ │
+│                                                                    │
+│    For each record in batch.Records {                              │
+│                                                                    │
+│      ┌──────────────────────────────────────────────────────────┐ │
+│      │ Set timestamp                                            │ │
+│      │ record.Header["WARC-Date"] = batch.CaptureTime           │ │
+│      │   → "2025-01-25T12:30:45.123456789Z"                     │ │
+│      │                                                          │ │
+│      │ Reference warcinfo                                       │ │
+│      │ record.Header["WARC-Warcinfo-ID"] = warcinfoID           │ │
+│      │                                                          │ │
+│      │ Calculate content length                                │ │
+│      │ record.Header["Content-Length"] = record.Content.Size()  │ │
+│      └──────────────────────────────────────────────────────────┘ │
+│                                                                    │
+│      ┌──────────────────────────────────────────────────────────┐ │
+│      │ WriteRecord(record)                                      │ │
+│      │                                                          │ │
+│      │ Write to file:                                           │ │
+│      │ ┌──────────────────────────────────────────────────────┐ │ │
+│      │ │ WARC/1.1                                             │ │ │
+│      │ │ WARC-Type: response                                  │ │ │
+│      │ │ WARC-Record-ID: <urn:uuid:...>                       │ │ │
+│      │ │ WARC-Concurrent-To: <urn:uuid:...>                   │ │ │
+│      │ │ WARC-Target-URI: https://example.com/page            │ │ │
+│      │ │ WARC-Date: 2025-01-25T12:30:45.123456789Z            │ │ │
+│      │ │ WARC-Payload-Digest: sha1:ABC123...                  │ │ │
+│      │ │ WARC-Block-Digest: sha1:DEF456...                    │ │ │
+│      │ │ WARC-Warcinfo-ID: <urn:uuid:...>                     │ │ │
+│      │ │ Content-Type: application/http;msgtype=response      │ │ │
+│      │ │ Content-Length: 5678                                 │ │ │
+│      │ │                                                       │ │ │
+│      │ │ HTTP/1.1 200 OK                                      │ │ │
+│      │ │ Content-Type: text/html                              │ │ │
+│      │ │ Content-Encoding: gzip                               │ │ │
+│      │ │                                                       │ │ │
+│      │ │ [gzipped HTML body bytes...]                         │ │ │
+│      │ │                                                       │ │ │
+│      │ │                                                       │ │ │
+│      │ └──────────────────────────────────────────────────────┘ │ │
+│      │                                                          │ │
+│      │ Compression pipeline:                                   │ │
+│      │   Record → bufio.Writer → gzip.Writer → file           │ │
+│      │                                                          │ │
+│      │ Flush record-level buffers                              │ │
+│      │ Log: "WARC record written"                              │ │
+│      └──────────────────────────────────────────────────────────┘ │
+│                                                                    │
+│      Metrics:                                                      │
+│        total_data_written += bytes_written                         │
+│    }                                                               │
+│                                                                    │
+│    Flush file-level buffers                                        │
+│                                                                    │
+│    if batch.FeedbackChan != nil {                                  │
+│      batch.FeedbackChan <- struct{}{}  // Signal completion       │
+│    }                                                               │
+│  }                                                                 │
+│                                                                    │
+│  // Channel closed - shutdown                                      │
+│  Flush all buffers                                                 │
+│  Close GZIP writer                                                 │
+│  Close file                                                        │
+│  Rename: remove ".open" suffix                                     │
+│  Log: "WARC writer shutting down cleanly"                          │
+│  done <- true                                                      │
+└────────────────────────────────────────────────────────────────────┘
+
+═══════════════════════════════════════════════════════════════════════════════════
+FINAL RESULT: WARC FILE ON DISK
+═══════════════════════════════════════════════════════════════════════════════════
+
+File: /output/WARC-20250125122030-00001-hostname.warc.gz
+Size: 47.3 MB (compressed)
+
+Contents (conceptual, actual file is gzip-compressed):
+
+┌────────────────────────────────────────────────────────────────────┐
+│ RECORD 1: warcinfo                                                 │
+├────────────────────────────────────────────────────────────────────┤
+│ WARC/1.1                                                           │
+│ WARC-Type: warcinfo                                                │
+│ WARC-Date: 2025-01-25T12:20:30.000000000Z                         │
+│ WARC-Record-ID: <urn:uuid:...>                                     │
+│ Content-Type: application/warc-fields                              │
+│ Content-Length: 123                                                │
+│                                                                    │
+│ software: gowarc/1.0.0                                             │
+│ format: WARC File Format 1.1                                       │
+│ conformsTo: http://iipc.github.io/warc-specifications/...          │
+│                                                                    │
+│                                                                    │
+└────────────────────────────────────────────────────────────────────┘
+
+┌────────────────────────────────────────────────────────────────────┐
+│ RECORD 2: request                                                  │
+├────────────────────────────────────────────────────────────────────┤
+│ WARC/1.1                                                           │
+│ WARC-Type: request                                                 │
+│ WARC-Date: 2025-01-25T12:30:45.123456789Z                         │
+│ WARC-Record-ID: <urn:uuid:550e8400-e29b-41d4-a716-446655440000>    │
+│ WARC-Concurrent-To: <urn:uuid:6ba7b810-9dad-11d1-80b4-00c04fd430c8>│
+│ WARC-Target-URI: https://example.com/page                          │
+│ WARC-Warcinfo-ID: <urn:uuid:...>                                   │
+│ WARC-Block-Digest: sha1:XYZ789...                                  │
+│ Content-Type: application/http;msgtype=request                     │
+│ Content-Length: 234                                                │
+│                                                                    │
+│ GET /page HTTP/1.1                                                 │
+│ Host: example.com                                                  │
+│ User-Agent: Go-http-client/1.1                                     │
+│ Accept-Encoding: gzip                                              │
+│                                                                    │
+│                                                                    │
+└────────────────────────────────────────────────────────────────────┘
+
+┌────────────────────────────────────────────────────────────────────┐
+│ RECORD 3: response                                                 │
+├────────────────────────────────────────────────────────────────────┤
+│ WARC/1.1                                                           │
+│ WARC-Type: response                                                │
+│ WARC-Date: 2025-01-25T12:30:45.123456789Z                         │
+│ WARC-Record-ID: <urn:uuid:6ba7b810-9dad-11d1-80b4-00c04fd430c8>    │
+│ WARC-Concurrent-To: <urn:uuid:550e8400-e29b-41d4-a716-446655440000>│
+│ WARC-Target-URI: https://example.com/page                          │
+│ WARC-Warcinfo-ID: <urn:uuid:...>                                   │
+│ WARC-Payload-Digest: sha1:ABC123...                                │
+│ WARC-Block-Digest: sha1:DEF456...                                  │
+│ Content-Type: application/http;msgtype=response                    │
+│ Content-Length: 5678                                               │
+│                                                                    │
+│ HTTP/1.1 200 OK                                                    │
+│ Date: Sat, 25 Jan 2025 12:30:45 GMT                               │
+│ Content-Type: text/html; charset=UTF-8                             │
+│ Content-Encoding: gzip                                             │
+│ Content-Length: 5432                                               │
+│                                                                    │
+│ [5432 bytes of gzipped HTML content...]                            │
+│                                                                    │
+│                                                                    │
+└────────────────────────────────────────────────────────────────────┘
+
+... (more request/response pairs) ...
+
+═══════════════════════════════════════════════════════════════════════════════════
+OBSERVABILITY THROUGHOUT THE FLOW
+═══════════════════════════════════════════════════════════════════════════════════
+
+METRICS COLLECTED:
+──────────────────
+  proxy_requests_total{proxy="proxy.residential.net:1080"} = 1
+  proxy_last_used_nanoseconds{proxy="proxy.residential.net:1080"} = 1706140800000
+  total_data_written = 5678 bytes
+  (local_deduped_total = 0, doppelganger_deduped_total = 0, etc.)
+
+LOGS EMITTED:
+─────────────
+  [DEBUG] Proxy selected: proxy=proxy.residential.net:1080 network=tcp6
+  [DEBUG] Connection established via proxy: proxy=proxy.residential.net:1080
+  [DEBUG] TLS connection established via proxy: proxy=proxy.residential.net:1080
+  [INFO]  WARC record written: file=WARC-...-00001.warc.gz bytes=5678
+  [DEBUG] WARC record written: recordID=<urn:uuid:6ba7b810-...>
+
+═══════════════════════════════════════════════════════════════════════════════════
+KEY COMPONENTS SUMMARY
+═══════════════════════════════════════════════════════════════════════════════════
+
+┌─────────────────────┬──────────────────┬────────────────────────────────────┐
+│ Component           │ File             │ Responsibility                     │
+├─────────────────────┼──────────────────┼────────────────────────────────────┤
+│ CustomHTTPClient    │ client.go        │ Main entry point, coordination     │
+│ customDialer        │ dialer.go        │ Proxy/DNS/connection setup         │
+│ CustomConnection    │ dialer.go        │ Bidirectional byte capture         │
+│ DNS resolver        │ dns.go           │ Concurrent DNS with caching        │
+│ Proxy selector      │ dialer.go:208    │ Filter & round-robin proxies       │
+│ SpooledTempFile     │ utils.go         │ RAM→disk temp storage              │
+│ RecordBatch         │ write.go         │ Group related records              │
+│ recordWriter        │ warc.go:100      │ File writing & rotation            │
+│ Writer              │ write.go:50      │ Compression & WARC formatting      │
+│ StatsRegistry       │ stats.go         │ Metrics interface                  │
+│ LogBackend          │ logging.go       │ Logging interface                  │
+└─────────────────────┴──────────────────┴────────────────────────────────────┘
+
+═══════════════════════════════════════════════════════════════════════════════════
