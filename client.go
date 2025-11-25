@@ -89,7 +89,6 @@ type CustomHTTPClient struct {
 	interfacesWatcherStop    chan bool
 	WaitGroup                *WaitGroupWithCount
 	dedupeHashTable          *sync.Map
-	ErrChan                  chan *Error
 	WARCWriter               chan *RecordBatch
 	interfacesWatcherStarted chan bool
 	http.Client
@@ -129,7 +128,6 @@ func (c *CustomHTTPClient) Close() error {
 	}
 
 	wg.Wait()
-	close(c.ErrChan)
 
 	if c.randomLocalIP {
 		c.interfacesWatcherStop <- true
@@ -187,9 +185,6 @@ func NewWARCWritingHTTPClient(HTTPClientSettings HTTPClientSettings) (httpClient
 
 	// Set a hook to determine if we should discard a response
 	httpClient.DiscardHook = HTTPClientSettings.DiscardHook
-
-	// Create an error channel for sending WARC errors through
-	httpClient.ErrChan = make(chan *Error)
 
 	// Toggle verification of certificates
 	// InsecureSkipVerify expects the opposite of the verifyCerts flag, as such we flip it.

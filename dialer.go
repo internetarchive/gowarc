@@ -667,17 +667,11 @@ func (d *customDialer) writeWARCFromConnection(ctx context.Context, reqPipe, res
 	close(recordChan)
 
 	if readErr != nil {
-		d.client.ErrChan <- &Error{
-			Err:  readErr,
-			Func: "writeWARCFromConnection",
-		}
+		d.logBackend.Error("error reading from connection", "func", "writeWARCFromConnection", "error", readErr)
 
 		for record := range recordChan {
 			if closeErr := record.Content.Close(); closeErr != nil {
-				d.client.ErrChan <- &Error{
-					Err:  closeErr,
-					Func: "writeWARCFromConnection",
-				}
+				d.logBackend.Error("error closing record content", "func", "writeWARCFromConnection", "error", closeErr)
 			}
 		}
 
@@ -696,14 +690,11 @@ func (d *customDialer) writeWARCFromConnection(ctx context.Context, reqPipe, res
 
 	if len(batch.Records) != 2 {
 		err.Err = errors.New("warc: there was an unspecified problem creating one of the WARC records")
-		d.client.ErrChan <- err
+		d.logBackend.Error("failed to create WARC records", "func", err.Func, "error", err.Err)
 
 		for _, record := range batch.Records {
 			if closeErr := record.Content.Close(); closeErr != nil {
-				d.client.ErrChan <- &Error{
-					Err:  closeErr,
-					Func: "writeWARCFromConnection",
-				}
+				d.logBackend.Error("error closing record content", "func", "writeWARCFromConnection", "error", closeErr)
 			}
 		}
 
@@ -749,19 +740,13 @@ func (d *customDialer) writeWARCFromConnection(ctx context.Context, reqPipe, res
 			r.Header.Set("WARC-Target-URI", warcTargetURI)
 
 			if _, seekErr := r.Content.Seek(0, 0); seekErr != nil {
-				d.client.ErrChan <- &Error{
-					Err:  seekErr,
-					Func: "writeWARCFromConnection",
-				}
+				d.logBackend.Error("error seeking record content", "func", "writeWARCFromConnection", "error", seekErr)
 				return
 			}
 
 			digest, err := GetDigest(r.Content, d.client.DigestAlgorithm)
 			if err != nil {
-				d.client.ErrChan <- &Error{
-					Err:  err,
-					Func: "writeWARCFromConnection",
-				}
+				d.logBackend.Error("error calculating digest", "func", "writeWARCFromConnection", "error", err)
 				return
 			}
 
@@ -772,10 +757,7 @@ func (d *customDialer) writeWARCFromConnection(ctx context.Context, reqPipe, res
 				if r.Header.Get("WARC-Type") == "response" && !slices.Contains(emptyPayloadDigests, r.Header.Get("WARC-Payload-Digest")) {
 					captureTime, timeConversionErr := time.Parse(time.RFC3339, batch.CaptureTime)
 					if timeConversionErr != nil {
-						d.client.ErrChan <- &Error{
-							Err:  timeConversionErr,
-							Func: "writeWARCFromConnection.timeConversionErr",
-						}
+						d.logBackend.Error("error parsing capture time", "func", "writeWARCFromConnection", "error", timeConversionErr)
 						return
 					}
 					d.client.dedupeHashTable.Store(r.Header.Get("WARC-Payload-Digest"), revisitRecord{
