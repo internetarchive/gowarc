@@ -1782,7 +1782,7 @@ func TestHTTPClientWithIPv6Disabled(t *testing.T) {
 	logEntries := make([]LogEntry, 0)
 	if testLog.HasLevel(slog.LevelError) {
 		for _, entry := range testLog.Entries() {
-			if entry.Level == slog.LevelError && strings.Contains(entry.Message, "direct connection failed") && strings.Contains(entry.Args[3].(error).Error(), "dial tcp6: address 127.0.0.1: no suitable address found") {
+			if entry.Level == slog.LevelError && strings.Contains(entry.Message, "direct connection failed") && strings.Contains(entry.Args[3].(error).Error(), "dial tcp4: address ::1: no suitable address found") {
 				gotErr = true
 			}
 			logEntries = append(logEntries, entry)
