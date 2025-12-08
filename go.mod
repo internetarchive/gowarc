@@ -4,20 +4,20 @@ go 1.25.4
 
 require (
 	github.com/google/uuid v1.6.0
-	github.com/klauspost/compress v1.18.1
+	github.com/klauspost/compress v1.18.2
 	github.com/maypok86/otter v1.2.4
 	github.com/miekg/dns v1.1.68
 	github.com/refraction-networking/utls v1.8.1
 	github.com/remeh/sizedwaitgroup v1.0.0
-	github.com/spf13/cobra v1.10.1
+	github.com/spf13/cobra v1.10.2
 	github.com/things-go/go-socks5 v0.1.0
 	github.com/ulikunitz/xz v0.5.15
 	github.com/valyala/bytebufferpool v1.0.0
 	github.com/zeebo/blake3 v0.2.4
 	go.uber.org/goleak v1.3.0
 	golang.org/x/net v0.47.0
-	golang.org/x/sync v0.18.0
-	golang.org/x/sys v0.38.0
+	golang.org/x/sync v0.19.0
+	golang.org/x/sys v0.39.0
 )
 
 // By default, and historically, this project uses klauspost's gzip implementation,
