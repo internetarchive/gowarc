@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math/big"
 	"net"
 	"net/http"
@@ -39,6 +40,8 @@ func defaultRotatorSettings(t *testing.T) *RotatorSettings {
 		err             error
 	)
 
+	rotatorSettings.StatsRegistry = &localRegistry{}
+	rotatorSettings.LogBackend = &noopLogger{}
 	rotatorSettings.Prefix = "TEST"
 	rotatorSettings.OutputDirectory, err = os.MkdirTemp("", "warc-tests-")
 	if err != nil {
@@ -105,19 +108,6 @@ func sumRecordContentLengths(path string) (int64, error) {
 	return total, nil
 }
 
-// Helper function used in many tests
-func drainErrChan(t *testing.T, errChan chan *Error) func() {
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for err := range errChan {
-			t.Errorf("Error writing to WARC: %s", err.Err.Error())
-		}
-	}()
-	return func() { wg.Wait() }
-}
-
 func newTestImageServer(t testing.TB, st int) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fileBytes, err := os.ReadFile(path.Join("testdata", "image.svg"))
@@ -160,9 +150,6 @@ func TestHTTPClient(t *testing.T) {
 		err             error
 	)
 
-	// Reset counter to 0
-	DataTotal.Store(0)
-
 	// init test HTTP endpoint
 	server := newTestImageServer(t, http.StatusOK)
 	defer server.Close()
@@ -172,7 +159,6 @@ func TestHTTPClient(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Unable to init WARC writing HTTP client: %s", err)
 	}
-	waitForErrors := drainErrChan(t, httpClient.ErrChan)
 
 	req, err := http.NewRequest("GET", server.URL+"/testdata/image.svg", nil)
 	if err != nil {
@@ -188,7 +174,6 @@ func TestHTTPClient(t *testing.T) {
 	io.Copy(io.Discard, resp.Body)
 
 	httpClient.Close()
-	waitForErrors()
 
 	files, err := filepath.Glob(rotatorSettings.OutputDirectory + "/*")
 	if err != nil {
@@ -207,7 +192,7 @@ func TestHTTPClient(t *testing.T) {
 	}
 
 	// verify that the remote dedupe count is correct
-	dataTotal := httpClient.DataTotal.Load()
+	dataTotal := httpClient.statsRegistry.RegisterCounter(totalDataWritten, totalDataWrittenHelp, nil).WithLabels(nil).Get()
 	if dataTotal != expectedPayloadBytes {
 		t.Fatalf("total bytes downloaded mismatch, expected %d got %d", expectedPayloadBytes, dataTotal)
 	}
@@ -223,21 +208,17 @@ func TestHTTPClientRequestFailing(t *testing.T) {
 	server := newTestImageServer(t, http.StatusOK)
 	defer server.Close()
 
+	// init test logger to capture errors
+	testLog := NewTestLogger()
+
 	// init the HTTP client responsible for recording HTTP(s) requests / responses
-	httpClient, err := NewWARCWritingHTTPClient(HTTPClientSettings{RotatorSettings: rotatorSettings})
+	httpClient, err := NewWARCWritingHTTPClient(HTTPClientSettings{
+		RotatorSettings: rotatorSettings,
+		LogBackend:      testLog,
+	})
 	if err != nil {
 		t.Fatalf("Unable to init WARC writing HTTP client: %s", err)
 	}
-
-	errCh := make(chan *Error, 1)
-	var errChWg sync.WaitGroup
-	errChWg.Add(1)
-	go func() {
-		defer errChWg.Done()
-		for err := range httpClient.ErrChan {
-			errCh <- err
-		}
-	}()
 
 	// Prepare some dummy data and configure our error injector
 	data := []byte("this is some test data")
@@ -249,33 +230,21 @@ func TestHTTPClientRequestFailing(t *testing.T) {
 	}
 
 	_, err = httpClient.Do(req)
-	if err == nil {
-		select {
-		case recv := <-errCh:
-			if recv == nil {
-				t.Fatal("expected error via ErrChan but channel closed without value")
-			}
-		case <-time.After(2 * time.Second):
-			t.Fatal("expected error on Do or via ErrChan, got none")
-		}
-	} else {
-		t.Logf("got expected error: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "injected read error") {
+		t.Fatal("expected \"injected read error\" error, got nil")
 	}
 
 	httpClient.Close()
-	errChWg.Wait()
-	close(errCh)
 }
 
 func TestHTTPClientConnReadDeadline(t *testing.T) {
 	var (
 		rotatorSettings = defaultRotatorSettings(t)
-		errWg           sync.WaitGroup
 		err             error
 	)
 
 	// 1) Set up a test server that sends its response slowly, in chunks
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 		w.WriteHeader(http.StatusOK)
 
@@ -300,14 +269,6 @@ func TestHTTPClientConnReadDeadline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Unable to init WARC writing HTTP client: %s", err)
 	}
-
-	// Read any WARC-writing errors
-	errWg.Add(1)
-	go func() {
-		defer errWg.Done()
-		for range httpClient.ErrChan {
-		}
-	}()
 
 	// 3) Create a request
 	req, err := http.NewRequest("GET", server.URL, nil)
@@ -335,7 +296,6 @@ func TestHTTPClientConnReadDeadline(t *testing.T) {
 func TestHTTPClientContextCancellation(t *testing.T) {
 	var (
 		rotatorSettings = defaultRotatorSettings(t)
-		errWg           sync.WaitGroup
 		err             error
 	)
 
@@ -362,15 +322,6 @@ func TestHTTPClientContextCancellation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Unable to init WARC writing HTTP client: %s", err)
 	}
-
-	// Read any WARC-writing errors
-	errWg.Add(1)
-	go func() {
-		defer errWg.Done()
-		for _ = range httpClient.ErrChan {
-			// t.Errorf("Error writing to WARC: %s", e.Err.Error())
-		}
-	}()
 
 	// 3) Create a request with a cancellable context
 	ctx, cancel := context.WithCancel(context.Background())
@@ -424,11 +375,12 @@ func TestHTTPClientWithFeedbackChan(t *testing.T) {
 	defer server.Close()
 
 	// init the HTTP client responsible for recording HTTP(s) requests / responses
-	httpClient, err := NewWARCWritingHTTPClient(HTTPClientSettings{RotatorSettings: rotatorSettings})
+	httpClient, err := NewWARCWritingHTTPClient(HTTPClientSettings{
+		RotatorSettings: rotatorSettings,
+	})
 	if err != nil {
 		t.Fatalf("Unable to init WARC writing HTTP client: %s", err)
 	}
-	waitForErrors := drainErrChan(t, httpClient.ErrChan)
 
 	req, err := http.NewRequest("GET", server.URL+"/testdata/image.svg", nil)
 	if err != nil {
@@ -449,7 +401,6 @@ func TestHTTPClientWithFeedbackChan(t *testing.T) {
 	<-feedbackCh
 
 	httpClient.Close()
-	waitForErrors()
 
 	files, err := filepath.Glob(rotatorSettings.OutputDirectory + "/*")
 	if err != nil {
@@ -499,6 +450,9 @@ func TestHTTPClientTLSHandshakeTimeout(t *testing.T) {
 
 	serverURL := "https://" + ln.Addr().String()
 
+	// 4) Set up a test logger to capture errors
+	testLog := NewTestLogger()
+
 	// 5) Create the WARC-writing HTTP client
 	//    The critical part here is enforcing the handshake timeout.
 	//    (Exact field names may differ based on your library.)
@@ -506,11 +460,11 @@ func TestHTTPClientTLSHandshakeTimeout(t *testing.T) {
 		RotatorSettings:     rotatorSettings,
 		TLSHandshakeTimeout: 1 * time.Second, // <--- The key line
 		VerifyCerts:         true,            // or "VerifyCerts: false" depending on your lib
+		LogBackend:          testLog,
 	})
 	if err != nil {
 		t.Fatalf("Unable to init WARC writing HTTP client: %v", err)
 	}
-	waitForErrors := drainErrChan(t, httpClient.ErrChan)
 
 	// 6) Attempt the GET, which should fail due to TLS handshake delay
 	req, err := http.NewRequest("GET", serverURL, nil)
@@ -529,8 +483,25 @@ func TestHTTPClientTLSHandshakeTimeout(t *testing.T) {
 		t.Logf("Got expected error: %v", err)
 	}
 
+	// Check if an error is logged with the expected message
+	gotErr := false
+	logEntries := make([]LogEntry, 0)
+	if testLog.HasLevel(slog.LevelError) {
+		for _, entry := range testLog.Entries() {
+			if entry.Level == slog.LevelError && strings.Contains(entry.Message, "TLS handshake failed") && strings.Contains(entry.Args[3].(error).Error(), "context deadline exceeded") {
+				gotErr = true
+			} else if entry.Level == slog.LevelError {
+				t.Logf("Unexpected log entry: %v", entry)
+			}
+			logEntries = append(logEntries, entry)
+		}
+	}
+
+	if !gotErr {
+		t.Fatalf("Expected TLS handshake failed error in logs, got %v", logEntries)
+	}
+
 	httpClient.Close()
-	waitForErrors()
 
 	<-doneChan // Wait for the server goroutine to exit
 }
@@ -538,7 +509,6 @@ func TestHTTPClientTLSHandshakeTimeout(t *testing.T) {
 func TestHTTPClientServerClosingConnection(t *testing.T) {
 	var (
 		rotatorSettings = defaultRotatorSettings(t)
-		errWg           sync.WaitGroup
 		err             error
 	)
 
@@ -573,18 +543,12 @@ func TestHTTPClientServerClosingConnection(t *testing.T) {
 	defer server.Close()
 
 	// init the HTTP client responsible for recording HTTP(s) requests / responses
-	httpClient, err := NewWARCWritingHTTPClient(HTTPClientSettings{RotatorSettings: rotatorSettings})
+	httpClient, err := NewWARCWritingHTTPClient(HTTPClientSettings{
+		RotatorSettings: rotatorSettings,
+	})
 	if err != nil {
 		t.Fatalf("Unable to init WARC writing HTTP client: %s", err)
 	}
-
-	errWg.Add(1)
-	go func() {
-		defer errWg.Done()
-		for _ = range httpClient.ErrChan {
-			// We expect an error here, so we don't need to log it
-		}
-	}()
 
 	req, err := http.NewRequest("GET", server.URL, nil)
 	if err != nil {
@@ -618,14 +582,16 @@ func TestHTTPClientDNSFailure(t *testing.T) {
 		err             error
 	)
 
+	testLog := NewTestLogger()
+
 	// Initialize the WARC-writing HTTP client
 	httpClient, err := NewWARCWritingHTTPClient(HTTPClientSettings{
 		RotatorSettings: rotatorSettings,
+		LogBackend:      testLog,
 	})
 	if err != nil {
 		t.Fatalf("Unable to init WARC writing HTTP client: %s", err)
 	}
-	waitForErrors := drainErrChan(t, httpClient.ErrChan)
 
 	// Use a guaranteed-nonresolvable domain
 	req, err := http.NewRequest("GET", "http://should-not-resolve.example.invalid", nil)
@@ -644,8 +610,23 @@ func TestHTTPClientDNSFailure(t *testing.T) {
 		t.Logf("Got expected DNS error: %v", err)
 	}
 
+	// Verify the error was logged
+	gotErr := false
+	logEntries := make([]LogEntry, 0)
+	if testLog.HasLevel(slog.LevelError) {
+		for _, entry := range testLog.Entries() {
+			if entry.Level == slog.LevelError && strings.Contains(entry.Message, "DNS resolution failed") && strings.Contains(entry.Args[3].(error).Error(), "failed to resolve DNS: A error: no TYPE=A record found, AAAA error: no TYPE=AAAA record found") {
+				gotErr = true
+			}
+			logEntries = append(logEntries, entry)
+		}
+	}
+
+	if !gotErr {
+		t.Fatalf("Expected DNS resolution failed error in logs, got %v", logEntries)
+	}
+
 	httpClient.Close()
-	waitForErrors()
 }
 
 func TestHTTPClientWithProxy(t *testing.T) {
@@ -688,11 +669,16 @@ func TestHTTPClientWithProxy(t *testing.T) {
 	// init the HTTP client responsible for recording HTTP(s) requests / responses
 	httpClient, err := NewWARCWritingHTTPClient(HTTPClientSettings{
 		RotatorSettings: rotatorSettings,
-		Proxy:           fmt.Sprintf("socks5://%s", proxyAddr)})
+		Proxies: []ProxyConfig{
+			{
+				URL:     fmt.Sprintf("socks5://%s", proxyAddr),
+				Network: ProxyNetworkAny,
+				Type:    ProxyTypeAny,
+			},
+		}})
 	if err != nil {
 		t.Fatalf("Unable to init WARC writing HTTP client: %s", err)
 	}
-	waitForErrors := drainErrChan(t, httpClient.ErrChan)
 
 	req, err := http.NewRequest("GET", server.URL, nil)
 	if err != nil {
@@ -708,7 +694,6 @@ func TestHTTPClientWithProxy(t *testing.T) {
 	io.Copy(io.Discard, resp.Body)
 
 	httpClient.Close()
-	waitForErrors()
 
 	files, err := filepath.Glob(rotatorSettings.OutputDirectory + "/*")
 	if err != nil {
@@ -732,11 +717,12 @@ func TestHTTPClientConcurrent(t *testing.T) {
 	defer server.Close()
 
 	// init the HTTP client responsible for recording HTTP(s) requests / responses
-	httpClient, err := NewWARCWritingHTTPClient(HTTPClientSettings{RotatorSettings: rotatorSettings})
+	httpClient, err := NewWARCWritingHTTPClient(HTTPClientSettings{
+		RotatorSettings: rotatorSettings,
+	})
 	if err != nil {
 		t.Fatalf("Unable to init WARC writing HTTP client: %s", err)
 	}
-	waitForErrors := drainErrChan(t, httpClient.ErrChan)
 
 	wg.Add(concurrency)
 	for i := 0; i < concurrency; i++ {
@@ -746,13 +732,11 @@ func TestHTTPClientConcurrent(t *testing.T) {
 			req, err := http.NewRequest("GET", server.URL, nil)
 			req.Close = true
 			if err != nil {
-				httpClient.ErrChan <- &Error{Err: err}
 				return
 			}
 
 			resp, err := httpClient.Do(req)
 			if err != nil {
-				httpClient.ErrChan <- &Error{Err: err}
 				return
 			}
 			defer resp.Body.Close()
@@ -765,7 +749,6 @@ func TestHTTPClientConcurrent(t *testing.T) {
 	wg.Wait()
 
 	httpClient.Close()
-	waitForErrors()
 
 	files, err := filepath.Glob(rotatorSettings.OutputDirectory + "/*")
 	if err != nil {
@@ -790,11 +773,12 @@ func TestHTTPClientMultiWARCWriters(t *testing.T) {
 	defer server.Close()
 
 	// init the HTTP client responsible for recording HTTP(s) requests / responses
-	httpClient, err := NewWARCWritingHTTPClient(HTTPClientSettings{RotatorSettings: rotatorSettings})
+	httpClient, err := NewWARCWritingHTTPClient(HTTPClientSettings{
+		RotatorSettings: rotatorSettings,
+	})
 	if err != nil {
 		t.Fatalf("Unable to init WARC writing HTTP client: %s", err)
 	}
-	waitForErrors := drainErrChan(t, httpClient.ErrChan)
 
 	wg.Add(concurrency)
 	for i := 0; i < concurrency; i++ {
@@ -804,13 +788,11 @@ func TestHTTPClientMultiWARCWriters(t *testing.T) {
 			req, err := http.NewRequest("GET", server.URL, nil)
 			req.Close = true
 			if err != nil {
-				httpClient.ErrChan <- &Error{Err: err}
 				return
 			}
 
 			resp, err := httpClient.Do(req)
 			if err != nil {
-				httpClient.ErrChan <- &Error{Err: err}
 				return
 			}
 			defer resp.Body.Close()
@@ -823,7 +805,6 @@ func TestHTTPClientMultiWARCWriters(t *testing.T) {
 	wg.Wait()
 
 	httpClient.Close()
-	waitForErrors()
 
 	files, err := filepath.Glob(rotatorSettings.OutputDirectory + "/*")
 	if err != nil {
@@ -846,10 +827,6 @@ func TestHTTPClientLocalDedupe(t *testing.T) {
 		err             error
 	)
 
-	// Reset counter to 0
-	LocalDedupeTotal.Store(0)
-	LocalDedupeTotalBytes.Store(0)
-
 	// init test HTTP endpoint
 	server := newTestImageServer(t, http.StatusOK)
 	defer server.Close()
@@ -864,7 +841,6 @@ func TestHTTPClientLocalDedupe(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Unable to init WARC writing HTTP client: %s", err)
 	}
-	waitForErrors := drainErrChan(t, httpClient.ErrChan)
 
 	for i := 0; i < 2; i++ {
 		req, err := http.NewRequest("GET", server.URL, nil)
@@ -884,7 +860,6 @@ func TestHTTPClientLocalDedupe(t *testing.T) {
 	}
 
 	httpClient.Close()
-	waitForErrors()
 
 	files, err := filepath.Glob(rotatorSettings.OutputDirectory + "/*")
 	if err != nil {
@@ -897,18 +872,13 @@ func TestHTTPClientLocalDedupe(t *testing.T) {
 	}
 
 	// verify that the local dedupe count is correct
-	if LocalDedupeTotalBytes.Load() != 26872 {
-		t.Fatalf("local dedupe total bytes mismatch, expected: 26872 got: %d", LocalDedupeTotalBytes.Load())
-	}
-
-	// Ensure that HTTP client results work correctly as well
-	if httpClient.LocalDedupeTotalBytes.Load() != 26872 {
-		t.Fatalf("local dedupe total bytes mismatch, expected: 26872 got: %d", httpClient.LocalDedupeTotalBytes.Load())
+	if httpClient.statsRegistry.RegisterCounter(localDedupedBytesTotal, localDedupedBytesTotalHelp, nil).WithLabels(nil).Get() != 26872 {
+		t.Fatalf("local dedupe total bytes mismatch, expected: 26872 got: %d", httpClient.statsRegistry.RegisterCounter(localDedupedBytesTotal, localDedupedBytesTotalHelp, nil).WithLabels(nil).Get())
 	}
 
 	// 1 is expected due to requiring one request to enter into the table.
-	if httpClient.LocalDedupeTotal.Load() != 1 {
-		t.Fatalf("local dedupe total mismatch, expected: 1 got: %d", httpClient.LocalDedupeTotal.Load())
+	if httpClient.statsRegistry.RegisterCounter(localDedupedTotal, localDedupedTotalHelp, nil).WithLabels(nil).Get() != 1 {
+		t.Fatalf("local dedupe total mismatch, expected: 1 got: %d", httpClient.statsRegistry.RegisterCounter(localDedupedTotal, localDedupedTotalHelp, nil).WithLabels(nil).Get())
 	}
 }
 
@@ -922,11 +892,7 @@ func TestHTTPClientRemoteDedupe(t *testing.T) {
 	// init test HTTP endpoint
 	mux := http.NewServeMux()
 
-	// Reset counter to 0
-	CDXDedupeTotal.Store(0)
-	CDXDedupeTotalBytes.Store(0)
-
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
 		fileBytes, err := os.ReadFile(path.Join("testdata", "image.svg"))
 		if err != nil {
 			t.Fatal(err)
@@ -937,7 +903,7 @@ func TestHTTPClientRemoteDedupe(t *testing.T) {
 		w.Write(fileBytes)
 	})
 
-	mux.HandleFunc(dedupePath, func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(dedupePath, func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain;charset=UTF-8")
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(dedupeResp))
@@ -958,7 +924,6 @@ func TestHTTPClientRemoteDedupe(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Unable to init WARC writing HTTP client: %s", err)
 	}
-	waitForErrors := drainErrChan(t, httpClient.ErrChan)
 
 	for i := 0; i < 4; i++ {
 		req, err := http.NewRequest("GET", server.URL, nil)
@@ -978,7 +943,6 @@ func TestHTTPClientRemoteDedupe(t *testing.T) {
 	}
 
 	httpClient.Close()
-	waitForErrors()
 
 	files, err := filepath.Glob(rotatorSettings.OutputDirectory + "/*")
 	if err != nil {
@@ -990,18 +954,13 @@ func TestHTTPClientRemoteDedupe(t *testing.T) {
 		testFileRevisitVailidity(t, path, "2022-03-20T00:25:18Z", "sha1:UIRWL5DFIPQ4MX3D3GFHM2HCVU3TZ6I3", false)
 	}
 
-	// verify that the remote dedupe count is correct
-	if CDXDedupeTotalBytes.Load() != 107488 {
-		t.Fatalf("remote dedupe total bytes mismatch, expected: 107488 got: %d", CDXDedupeTotalBytes.Load())
+	// verify that the CDX dedupe count is correct
+	if httpClient.statsRegistry.RegisterCounter(cdxDedupedBytesTotal, cdxDedupedBytesTotalHelp, nil).WithLabels(nil).Get() != 107488 {
+		t.Fatalf("CDX dedupe total bytes mismatch, expected: 26872 got: %d", httpClient.statsRegistry.RegisterCounter(cdxDedupedBytesTotal, cdxDedupedBytesTotalHelp, nil).WithLabels(nil).Get())
 	}
 
-	// Ensure that HTTP client results work correctly as well
-	if httpClient.CDXDedupeTotalBytes.Load() != 107488 {
-		t.Fatalf("remote dedupe total bytes mismatch, expected: 107488 got: %d", httpClient.CDXDedupeTotalBytes.Load())
-	}
-
-	if httpClient.CDXDedupeTotal.Load() != 4 {
-		t.Fatalf("remote dedupe total mismatch, expected: 4 got: %d", httpClient.CDXDedupeTotal.Load())
+	if httpClient.statsRegistry.RegisterCounter(cdxDedupedTotal, cdxDedupedTotalHelp, nil).WithLabels(nil).Get() != 4 {
+		t.Fatalf("CDX dedupe total mismatch, expected: 1 got: %d", httpClient.statsRegistry.RegisterCounter(cdxDedupedTotal, cdxDedupedTotalHelp, nil).WithLabels(nil).Get())
 	}
 }
 
@@ -1010,17 +969,12 @@ func TestHTTPClientDoppelgangerDedupe(t *testing.T) {
 		dedupePath      = "/api/records/UIRWL5DFIPQ4MX3D3GFHM2HCVU3TZ6I3"
 		dedupeResp      = "{\"id\":\"UIRWL5DFIPQ4MX3D3GFHM2HCVU3TZ6I3\",\"uri\":\"https://upload.wikimedia.org/wikipedia/commons/5/55/Blason_ville_fr_Sarlat-la-Can%C3%A9da_%28Dordogne%29.svg\",\"date\":20220320002518}"
 		rotatorSettings = defaultRotatorSettings(t)
-		errWg           sync.WaitGroup
 		err             error
 	)
 	// init test HTTP endpoint
 	mux := http.NewServeMux()
 
-	// Reset counter to 0
-	DoppelgangerDedupeTotal.Store(0)
-	DoppelgangerDedupeTotalBytes.Store(0)
-
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
 		fileBytes, err := os.ReadFile(path.Join("testdata", "image.svg"))
 		if err != nil {
 			t.Fatal(err)
@@ -1031,7 +985,7 @@ func TestHTTPClientDoppelgangerDedupe(t *testing.T) {
 		w.Write(fileBytes)
 	})
 
-	mux.HandleFunc(dedupePath, func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(dedupePath, func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(dedupeResp))
@@ -1054,14 +1008,6 @@ func TestHTTPClientDoppelgangerDedupe(t *testing.T) {
 		t.Fatalf("Unable to init WARC writing HTTP client: %s", err)
 	}
 
-	errWg.Add(1)
-	go func() {
-		defer errWg.Done()
-		for err := range httpClient.ErrChan {
-			t.Errorf("Error writing to WARC: %s", err.Err.Error())
-		}
-	}()
-
 	for i := 0; i < 4; i++ {
 		req, err := http.NewRequest("GET", server.URL, nil)
 		if err != nil {
@@ -1089,18 +1035,13 @@ func TestHTTPClientDoppelgangerDedupe(t *testing.T) {
 		testFileRevisitVailidity(t, path, "2022-03-20T00:25:18Z", "sha1:UIRWL5DFIPQ4MX3D3GFHM2HCVU3TZ6I3", false)
 	}
 
-	// verify that the remote dedupe count is correct
-	if DoppelgangerDedupeTotalBytes.Load() != 107488 {
-		t.Fatalf("remote dedupe total bytes mismatch, expected: 107488 got: %d", DoppelgangerDedupeTotalBytes.Load())
+	// verify that the Doppelganger count is correct
+	if httpClient.statsRegistry.RegisterCounter(doppelgangerDedupedBytesTotal, doppelgangerDedupedBytesTotalHelp, nil).WithLabels(nil).Get() != 107488 {
+		t.Fatalf("Doppelganger total bytes mismatch, expected: 26872 got: %d", httpClient.statsRegistry.RegisterCounter(doppelgangerDedupedBytesTotal, doppelgangerDedupedBytesTotalHelp, nil).WithLabels(nil).Get())
 	}
 
-	// Ensure that HTTP client results work correctly as well
-	if httpClient.DoppelgangerDedupeTotalBytes.Load() != 107488 {
-		t.Fatalf("remote dedupe total bytes mismatch, expected: 107488 got: %d", httpClient.DoppelgangerDedupeTotalBytes.Load())
-	}
-
-	if httpClient.DoppelgangerDedupeTotal.Load() != 4 {
-		t.Fatalf("remote dedupe total mismatch, expected: 4 got: %d", httpClient.DoppelgangerDedupeTotal.Load())
+	if httpClient.statsRegistry.RegisterCounter(doppelgangerDedupedTotal, doppelgangerDedupedTotalHelp, nil).WithLabels(nil).Get() != 4 {
+		t.Fatalf("Doppelganger total mismatch, expected: 1 got: %d", httpClient.statsRegistry.RegisterCounter(doppelgangerDedupedTotal, doppelgangerDedupedTotalHelp, nil).WithLabels(nil).Get())
 	}
 }
 
@@ -1109,10 +1050,6 @@ func TestHTTPClientDedupeEmptyPayload(t *testing.T) {
 		rotatorSettings = defaultRotatorSettings(t)
 		err             error
 	)
-
-	// Reset counter to 0
-	LocalDedupeTotal.Store(0)
-	LocalDedupeTotalBytes.Store(0)
 
 	// init test HTTP endpoint
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1134,7 +1071,6 @@ func TestHTTPClientDedupeEmptyPayload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Unable to init WARC writing HTTP client: %s", err)
 	}
-	waitForErrors := drainErrChan(t, httpClient.ErrChan)
 
 	for i := 0; i < 2; i++ {
 		req, err := http.NewRequest("GET", server.URL, nil)
@@ -1154,7 +1090,6 @@ func TestHTTPClientDedupeEmptyPayload(t *testing.T) {
 	}
 
 	httpClient.Close()
-	waitForErrors()
 
 	files, err := filepath.Glob(rotatorSettings.OutputDirectory + "/*")
 	if err != nil {
@@ -1167,24 +1102,18 @@ func TestHTTPClientDedupeEmptyPayload(t *testing.T) {
 	}
 
 	// verify that the local dedupe count is correct
-	if LocalDedupeTotalBytes.Load() != 0 {
-		t.Fatalf("local dedupe total bytes mismatch, expected: 0 got: %d", LocalDedupeTotalBytes.Load())
+	if httpClient.statsRegistry.RegisterCounter(localDedupedBytesTotal, localDedupedBytesTotalHelp, nil).WithLabels(nil).Get() != 0 {
+		t.Fatalf("local dedupe total bytes mismatch, expected: 26872 got: %d", httpClient.statsRegistry.RegisterCounter(localDedupedBytesTotal, localDedupedBytesTotalHelp, nil).WithLabels(nil).Get())
 	}
 
-	// Ensure that HTTP client results work correctly as well
-	if httpClient.LocalDedupeTotalBytes.Load() != 0 {
-		t.Fatalf("local dedupe total bytes mismatch, expected: 0 got: %d", httpClient.LocalDedupeTotalBytes.Load())
-	}
-
-	if httpClient.LocalDedupeTotal.Load() != 0 {
-		t.Fatalf("local dedupe total mismatch, expected: 0 got: %d", httpClient.LocalDedupeTotal.Load())
+	if httpClient.statsRegistry.RegisterCounter(localDedupedTotal, localDedupedTotalHelp, nil).WithLabels(nil).Get() != 0 {
+		t.Fatalf("local dedupe total mismatch, expected: 1 got: %d", httpClient.statsRegistry.RegisterCounter(localDedupedTotal, localDedupedTotalHelp, nil).WithLabels(nil).Get())
 	}
 }
 
 func TestHTTPClientDiscardHook(t *testing.T) {
 	var (
 		rotatorSettings = defaultRotatorSettings(t)
-		errWg           sync.WaitGroup
 		err             error
 	)
 
@@ -1194,9 +1123,12 @@ func TestHTTPClientDiscardHook(t *testing.T) {
 	server := newTestImageServer(t, http.StatusTooManyRequests)
 	defer server.Close()
 
+	testLog := NewTestLogger()
+
 	// init the HTTP client responsible for recording HTTP(s) requests / responses
 	httpClient, err := NewWARCWritingHTTPClient(HTTPClientSettings{
 		RotatorSettings: rotatorSettings,
+		LogBackend:      testLog,
 		// Set up a discard hook to discard 429 responses
 		DiscardHook: func(resp *http.Response) (bool, string) {
 			if resp.StatusCode != http.StatusTooManyRequests {
@@ -1209,25 +1141,6 @@ func TestHTTPClientDiscardHook(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Unable to init WARC writing HTTP client: %s", err)
 	}
-
-	errWg.Add(1)
-	go func() {
-		defer errWg.Done()
-		for err := range httpClient.ErrChan {
-			// validate 429 filtering as well as error reporting by url
-			discardErr, ok := err.Err.(*DiscardHookError)
-			if !ok {
-				t.Errorf("Expected DiscardHookError, got: %T, error: %v", err.Err, err)
-				continue
-			}
-			if discardErr.URL != server.URL+"/" {
-				t.Errorf("Expected URL %s, got: %s", server.URL+"/", discardErr.URL)
-			}
-			if discardErr.Reason != expectedReason {
-				t.Errorf("Expected Reason %s, got: %s", expectedReason, discardErr.Reason)
-			}
-		}
-	}()
 
 	req, err := http.NewRequest("GET", server.URL, nil)
 	if err != nil {
@@ -1243,6 +1156,22 @@ func TestHTTPClientDiscardHook(t *testing.T) {
 	io.Copy(io.Discard, resp.Body)
 
 	httpClient.Close()
+
+	// Verify the error was logged
+	gotErr := false
+	logEntries := make([]LogEntry, 0)
+	if testLog.HasLevel(slog.LevelError) {
+		for _, entry := range testLog.Entries() {
+			if entry.Level == slog.LevelError && strings.Contains(entry.Message, "error reading from connection") && strings.Contains(entry.Args[3].(*DiscardHookError).Error(), "response was blocked by DiscardHook") && strings.Contains(entry.Args[3].(*DiscardHookError).Error(), "429 response") {
+				gotErr = true
+			}
+			logEntries = append(logEntries, entry)
+		}
+	}
+
+	if !gotErr {
+		t.Fatalf("Expected \"error reading from connection\" error in logs, got %v", logEntries)
+	}
 
 	files, err := filepath.Glob(rotatorSettings.OutputDirectory + "/*")
 	if err != nil {
@@ -1279,7 +1208,6 @@ func TestHTTPClientPayloadLargerThan2MB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Unable to init WARC writing HTTP client: %s", err)
 	}
-	waitForErrors := drainErrChan(t, httpClient.ErrChan)
 
 	req, err := http.NewRequest("GET", server.URL, nil)
 	if err != nil {
@@ -1295,7 +1223,6 @@ func TestHTTPClientPayloadLargerThan2MB(t *testing.T) {
 	io.Copy(io.Discard, resp.Body)
 
 	httpClient.Close()
-	waitForErrors()
 
 	files, err := filepath.Glob(rotatorSettings.OutputDirectory + "/*")
 	if err != nil {
@@ -1334,7 +1261,6 @@ func TestConcurrentHTTPClientPayloadLargerThan2MB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Unable to init WARC writing HTTP client: %s", err)
 	}
-	waitForErrors := drainErrChan(t, httpClient.ErrChan)
 
 	wg.Add(concurrency)
 	for i := 0; i < concurrency; i++ {
@@ -1344,13 +1270,11 @@ func TestConcurrentHTTPClientPayloadLargerThan2MB(t *testing.T) {
 			req, err := http.NewRequest("GET", server.URL, nil)
 			req.Close = true
 			if err != nil {
-				httpClient.ErrChan <- &Error{Err: err}
 				return
 			}
 
 			resp, err := httpClient.Do(req)
 			if err != nil {
-				httpClient.ErrChan <- &Error{Err: err}
 				return
 			}
 
@@ -1363,7 +1287,6 @@ func TestConcurrentHTTPClientPayloadLargerThan2MB(t *testing.T) {
 	wg.Wait()
 
 	httpClient.Close()
-	waitForErrors()
 
 	files, err := filepath.Glob(rotatorSettings.OutputDirectory + "/*")
 	if err != nil {
@@ -1395,7 +1318,6 @@ func TestHTTPClientWithSelfSignedCertificate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Unable to init WARC writing HTTP client: %s", err)
 	}
-	waitForErrors := drainErrChan(t, httpClient.ErrChan)
 
 	req, err := http.NewRequest("GET", server.URL, nil)
 	if err != nil {
@@ -1411,7 +1333,6 @@ func TestHTTPClientWithSelfSignedCertificate(t *testing.T) {
 	io.Copy(io.Discard, resp.Body)
 
 	httpClient.Close()
-	waitForErrors()
 
 	files, err := filepath.Glob(rotatorSettings.OutputDirectory + "/*")
 	if err != nil {
@@ -1448,7 +1369,6 @@ func TestWARCWritingWithDisallowedCertificate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Unable to init WARC writing HTTP client: %s", err)
 	}
-	waitForErrors := drainErrChan(t, httpClient.ErrChan)
 
 	req, err := http.NewRequest("GET", server.URL, nil)
 	if err != nil {
@@ -1467,7 +1387,6 @@ func TestWARCWritingWithDisallowedCertificate(t *testing.T) {
 	}
 
 	httpClient.Close()
-	waitForErrors()
 
 	files, err := filepath.Glob(rotatorSettings.OutputDirectory + "/*")
 	if err != nil {
@@ -1495,7 +1414,6 @@ func TestHTTPClientFullOnDisk(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Unable to init WARC writing HTTP client: %s", err)
 	}
-	waitForErrors := drainErrChan(t, httpClient.ErrChan)
 
 	req, err := http.NewRequest("GET", server.URL, nil)
 	if err != nil {
@@ -1511,7 +1429,6 @@ func TestHTTPClientFullOnDisk(t *testing.T) {
 	io.Copy(io.Discard, resp.Body)
 
 	httpClient.Close()
-	waitForErrors()
 
 	files, err := filepath.Glob(rotatorSettings.OutputDirectory + "/*")
 	if err != nil {
@@ -1526,7 +1443,6 @@ func TestHTTPClientFullOnDisk(t *testing.T) {
 func TestHTTPClientWithoutIoCopy(t *testing.T) {
 	var (
 		rotatorSettings = defaultRotatorSettings(t)
-		errWg           sync.WaitGroup
 		err             error
 	)
 
@@ -1537,22 +1453,16 @@ func TestHTTPClientWithoutIoCopy(t *testing.T) {
 	server := newTestImageServer(t, http.StatusOK)
 	defer server.Close()
 
+	testLog := NewTestLogger()
+
 	// init the HTTP client responsible for recording HTTP(s) requests / responses
-	httpClient, err := NewWARCWritingHTTPClient(HTTPClientSettings{RotatorSettings: rotatorSettings})
+	httpClient, err := NewWARCWritingHTTPClient(HTTPClientSettings{
+		RotatorSettings: rotatorSettings,
+		LogBackend:      testLog,
+	})
 	if err != nil {
 		t.Fatalf("Unable to init WARC writing HTTP client: %s", err)
 	}
-
-	errWg.Add(1)
-	go func() {
-		defer errWg.Done()
-		for err := range httpClient.ErrChan {
-			// validate 429 filtering as well as error reporting by url
-			if strings.Contains(err.Err.Error(), "SHA1 ran into an unrecoverable error url") {
-				t.Errorf("Error writing to WARC: %s", err.Err.Error())
-			}
-		}
-	}()
 
 	req, err := http.NewRequest("GET", server.URL, nil)
 	if err != nil {
@@ -1568,6 +1478,21 @@ func TestHTTPClientWithoutIoCopy(t *testing.T) {
 	resp.Body.Close()
 
 	httpClient.Close()
+
+	gotErr := false
+	logEntries := make([]LogEntry, 0)
+	if testLog.HasLevel(slog.LevelError) {
+		for _, entry := range testLog.Entries() {
+			if entry.Level == slog.LevelError && strings.Contains(entry.Message, "error reading from connection") && strings.Contains(entry.Args[3].(error).Error(), "readResponse: payload digest calculation failed: unexpected EOF") {
+				gotErr = true
+			}
+			logEntries = append(logEntries, entry)
+		}
+	}
+
+	if !gotErr {
+		t.Fatalf("Expected \"error reading from connection\" error in logs, got %v", logEntries)
+	}
 
 	files, err := filepath.Glob(rotatorSettings.OutputDirectory + "/*")
 	if err != nil {
@@ -1598,7 +1523,6 @@ func TestHTTPClientWithoutChunkEncoding(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Unable to init WARC writing HTTP client: %s", err)
 	}
-	waitForErrors := drainErrChan(t, httpClient.ErrChan)
 
 	req, err := http.NewRequest("GET", server.URL, nil)
 	if err != nil {
@@ -1614,7 +1538,6 @@ func TestHTTPClientWithoutChunkEncoding(t *testing.T) {
 	io.Copy(io.Discard, resp.Body)
 
 	httpClient.Close()
-	waitForErrors()
 
 	files, err := filepath.Glob(rotatorSettings.OutputDirectory + "/*")
 	if err != nil {
@@ -1642,7 +1565,6 @@ func TestHTTPClientWithZStandard(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Unable to init WARC writing HTTP client: %s", err)
 	}
-	waitForErrors := drainErrChan(t, httpClient.ErrChan)
 
 	req, err := http.NewRequest("GET", server.URL, nil)
 	if err != nil {
@@ -1658,7 +1580,6 @@ func TestHTTPClientWithZStandard(t *testing.T) {
 	io.Copy(io.Discard, resp.Body)
 
 	httpClient.Close()
-	waitForErrors()
 
 	files, err := filepath.Glob(rotatorSettings.OutputDirectory + "/*")
 	if err != nil {
@@ -1688,7 +1609,6 @@ func TestHTTPClientWithZStandardDictionary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Unable to init WARC writing HTTP client: %s", err)
 	}
-	waitForErrors := drainErrChan(t, httpClient.ErrChan)
 
 	req, err := http.NewRequest("GET", server.URL, nil)
 	if err != nil {
@@ -1704,7 +1624,6 @@ func TestHTTPClientWithZStandardDictionary(t *testing.T) {
 	io.Copy(io.Discard, resp.Body)
 
 	httpClient.Close()
-	waitForErrors()
 
 	files, err := filepath.Glob(rotatorSettings.OutputDirectory + "/*")
 	if err != nil {
@@ -1763,9 +1682,12 @@ func TestHTTPClientWithIPv4Disabled(t *testing.T) {
 
 	rotatorSettings := defaultRotatorSettings(t)
 
+	testLog := NewTestLogger()
+
 	httpClient, err := NewWARCWritingHTTPClient(HTTPClientSettings{
 		RotatorSettings: rotatorSettings,
 		DisableIPv4:     true,
+		LogBackend:      testLog,
 	})
 	if err != nil {
 		t.Fatalf("Unable to init WARC writing HTTP client: %s", err)
@@ -1791,6 +1713,21 @@ func TestHTTPClientWithIPv4Disabled(t *testing.T) {
 
 	httpClient.Close()
 
+	gotErr := false
+	logEntries := make([]LogEntry, 0)
+	if testLog.HasLevel(slog.LevelError) {
+		for _, entry := range testLog.Entries() {
+			if entry.Level == slog.LevelError && strings.Contains(entry.Message, "direct connection failed") && strings.Contains(entry.Args[3].(error).Error(), "dial tcp6: address 127.0.0.1: no suitable address found") {
+				gotErr = true
+			}
+			logEntries = append(logEntries, entry)
+		}
+	}
+
+	if !gotErr {
+		t.Fatalf("Expected \"direct connection failed\" error in logs, got %v", logEntries)
+	}
+
 	files, err := filepath.Glob(rotatorSettings.OutputDirectory + "/*")
 	if err != nil {
 		t.Fatal(err)
@@ -1810,9 +1747,12 @@ func TestHTTPClientWithIPv6Disabled(t *testing.T) {
 
 	rotatorSettings := defaultRotatorSettings(t)
 
+	testLog := NewTestLogger()
+
 	httpClient, err := NewWARCWritingHTTPClient(HTTPClientSettings{
 		RotatorSettings: rotatorSettings,
 		DisableIPv6:     true,
+		LogBackend:      testLog,
 	})
 	if err != nil {
 		t.Fatalf("Unable to init WARC writing HTTP client: %s", err)
@@ -1838,6 +1778,21 @@ func TestHTTPClientWithIPv6Disabled(t *testing.T) {
 
 	httpClient.Close()
 
+	gotErr := false
+	logEntries := make([]LogEntry, 0)
+	if testLog.HasLevel(slog.LevelError) {
+		for _, entry := range testLog.Entries() {
+			if entry.Level == slog.LevelError && strings.Contains(entry.Message, "direct connection failed") && strings.Contains(entry.Args[3].(error).Error(), "dial tcp4: address ::1: no suitable address found") {
+				gotErr = true
+			}
+			logEntries = append(logEntries, entry)
+		}
+	}
+
+	if !gotErr {
+		t.Fatalf("Expected \"direct connection failed\" error in logs, got %v", logEntries)
+	}
+
 	files, err := filepath.Glob(rotatorSettings.OutputDirectory + "/*")
 	if err != nil {
 		t.Fatal(err)
@@ -1853,7 +1808,6 @@ func BenchmarkConcurrentUnder2MB(b *testing.B) {
 	var (
 		rotatorSettings = defaultBenchmarkRotatorSettings(b)
 		wg              sync.WaitGroup
-		errWg           sync.WaitGroup
 		err             error
 	)
 
@@ -1876,14 +1830,6 @@ func BenchmarkConcurrentUnder2MB(b *testing.B) {
 		b.Fatalf("Unable to init WARC writing HTTP client: %s", err)
 	}
 
-	errWg.Add(1)
-	go func() {
-		defer errWg.Done()
-		for err := range httpClient.ErrChan {
-			b.Errorf("Error writing to WARC: %s", err.Err.Error())
-		}
-	}()
-
 	wg.Add(b.N)
 	for n := 0; n < b.N; n++ {
 		go func() {
@@ -1891,13 +1837,11 @@ func BenchmarkConcurrentUnder2MB(b *testing.B) {
 
 			req, err := http.NewRequest("GET", server.URL, nil)
 			if err != nil {
-				httpClient.ErrChan <- &Error{Err: err}
 				return
 			}
 
 			resp, err := httpClient.Do(req)
 			if err != nil {
-				httpClient.ErrChan <- &Error{Err: err}
 				return
 			}
 			defer resp.Body.Close()
@@ -1914,7 +1858,6 @@ func BenchmarkConcurrentUnder2MBZStandard(b *testing.B) {
 	var (
 		rotatorSettings = defaultBenchmarkRotatorSettings(b)
 		wg              sync.WaitGroup
-		errWg           sync.WaitGroup
 		err             error
 	)
 	rotatorSettings.Compression = "ZSTD"
@@ -1938,14 +1881,6 @@ func BenchmarkConcurrentUnder2MBZStandard(b *testing.B) {
 		b.Fatalf("Unable to init WARC writing HTTP client: %s", err)
 	}
 
-	errWg.Add(1)
-	go func() {
-		defer errWg.Done()
-		for err := range httpClient.ErrChan {
-			b.Errorf("Error writing to WARC: %s", err.Err.Error())
-		}
-	}()
-
 	wg.Add(b.N)
 	for n := 0; n < b.N; n++ {
 		go func() {
@@ -1953,13 +1888,11 @@ func BenchmarkConcurrentUnder2MBZStandard(b *testing.B) {
 
 			req, err := http.NewRequest("GET", server.URL, nil)
 			if err != nil {
-				httpClient.ErrChan <- &Error{Err: err}
 				return
 			}
 
 			resp, err := httpClient.Do(req)
 			if err != nil {
-				httpClient.ErrChan <- &Error{Err: err}
 				return
 			}
 			defer resp.Body.Close()
@@ -1976,7 +1909,6 @@ func BenchmarkConcurrentOver2MB(b *testing.B) {
 	var (
 		rotatorSettings = defaultBenchmarkRotatorSettings(b)
 		wg              sync.WaitGroup
-		errWg           sync.WaitGroup
 		err             error
 	)
 
@@ -1999,14 +1931,6 @@ func BenchmarkConcurrentOver2MB(b *testing.B) {
 		b.Fatalf("Unable to init WARC writing HTTP client: %s", err)
 	}
 
-	errWg.Add(1)
-	go func() {
-		defer errWg.Done()
-		for err := range httpClient.ErrChan {
-			b.Errorf("Error writing to WARC: %s", err.Err.Error())
-		}
-	}()
-
 	wg.Add(b.N)
 	for n := 0; n < b.N; n++ {
 		go func() {
@@ -2014,13 +1938,11 @@ func BenchmarkConcurrentOver2MB(b *testing.B) {
 
 			req, err := http.NewRequest("GET", server.URL, nil)
 			if err != nil {
-				httpClient.ErrChan <- &Error{Err: err}
 				return
 			}
 
 			resp, err := httpClient.Do(req)
 			if err != nil {
-				httpClient.ErrChan <- &Error{Err: err}
 				return
 			}
 			defer resp.Body.Close()
@@ -2037,7 +1959,6 @@ func BenchmarkConcurrentOver2MBZStandard(b *testing.B) {
 	var (
 		rotatorSettings = defaultBenchmarkRotatorSettings(b)
 		wg              sync.WaitGroup
-		errWg           sync.WaitGroup
 		err             error
 	)
 	rotatorSettings.Compression = "ZSTD"
@@ -2061,14 +1982,6 @@ func BenchmarkConcurrentOver2MBZStandard(b *testing.B) {
 		b.Fatalf("Unable to init WARC writing HTTP client: %s", err)
 	}
 
-	errWg.Add(1)
-	go func() {
-		defer errWg.Done()
-		for err := range httpClient.ErrChan {
-			b.Errorf("Error writing to WARC: %s", err.Err.Error())
-		}
-	}()
-
 	wg.Add(b.N)
 	for n := 0; n < b.N; n++ {
 		go func() {
@@ -2076,13 +1989,11 @@ func BenchmarkConcurrentOver2MBZStandard(b *testing.B) {
 
 			req, err := http.NewRequest("GET", server.URL, nil)
 			if err != nil {
-				httpClient.ErrChan <- &Error{Err: err}
 				return
 			}
 
 			resp, err := httpClient.Do(req)
 			if err != nil {
-				httpClient.ErrChan <- &Error{Err: err}
 				return
 			}
 			defer resp.Body.Close()

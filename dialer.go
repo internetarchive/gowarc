@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -39,6 +40,12 @@ const (
 	// This is used internally to retrieve the wrapped connection for advanced use cases.
 	// Use WithWrappedConnection() helper function for convenience.
 	ContextKeyWrappedConn contextKey = "wrappedConn"
+
+	// ContextKeyProxyType is the context key for requesting a specific proxy type.
+	// External callers (like Zeno) can set this to request a proxy of a specific type
+	// (Mobile, Residential, or Datacenter).
+	// Use WithProxyType() helper function for convenience.
+	ContextKeyProxyType contextKey = "proxyType"
 )
 
 // WithFeedbackChannel adds a feedback channel to the request context.
@@ -62,23 +69,51 @@ func WithWrappedConnection(ctx context.Context, wrappedConnChan chan *CustomConn
 	return context.WithValue(ctx, ContextKeyWrappedConn, wrappedConnChan)
 }
 
+// WithProxyType adds a proxy type preference to the request context.
+// When set, the proxy selector will prefer proxies of the specified type
+// (Mobile, Residential, or Datacenter).
+// This is typically used by external callers like Zeno when they need a specific proxy type.
+//
+// Example:
+//
+//	req = req.WithContext(warc.WithProxyType(req.Context(), warc.ProxyTypeMobile))
+func WithProxyType(ctx context.Context, proxyType ProxyType) context.Context {
+	return context.WithValue(ctx, ContextKeyProxyType, proxyType)
+}
+
 // dnsExchanger is an interface for DNS clients that can exchange messages
 type dnsExchanger interface {
 	ExchangeContext(ctx context.Context, m *dns.Msg, address string) (r *dns.Msg, rtt time.Duration, err error)
 }
 
+// proxyDialerInfo holds information about a configured proxy
+type proxyDialerInfo struct {
+	dialer         proxy.ContextDialer
+	needsHostname  bool // true if proxy requires hostname (socks5h, http), false if can use IP (socks5)
+	proxyNetwork   ProxyNetwork
+	proxyType      ProxyType
+	allowedDomains []string // glob patterns
+	url            string
+	name           string
+	stats          StatsRegistry
+}
+
 type customDialer struct {
-	proxyDialer        proxy.ContextDialer
-	proxyNeedsHostname bool // true if proxy requires hostname (socks5h, http), false if can use IP (socks5)
-	client             *CustomHTTPClient
-	DNSConfig          *dns.ClientConfig
-	DNSClient          dnsExchanger
-	DNSRecords         *otter.Cache[string, net.IP]
+	proxyDialers         []proxyDialerInfo
+	proxyRoundRobinIndex atomic.Uint32
+	allowDirectFallback  bool
+	client               *CustomHTTPClient
+	DNSConfig            *dns.ClientConfig
+	DNSClient            dnsExchanger
+	DNSRecords           *otter.Cache[string, net.IP]
 	net.Dialer
 	disableIPv4        bool
 	disableIPv6        bool
 	dnsConcurrency     int
 	dnsRoundRobinIndex atomic.Uint32
+
+	stats      StatsRegistry
+	logBackend LogBackend
 }
 
 var emptyPayloadDigests = []string{
@@ -88,14 +123,18 @@ var emptyPayloadDigests = []string{
 	"blake3:af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262",
 }
 
-func newCustomDialer(httpClient *CustomHTTPClient, proxyURL string, DialTimeout, DNSRecordsTTL, DNSResolutionTimeout time.Duration, DNSCacheSize int, DNSServers []string, DNSConcurrency int, disableIPv4, disableIPv6 bool) (d *customDialer, err error) {
+func newCustomDialer(httpClient *CustomHTTPClient, proxies []ProxyConfig, allowDirectFallback bool, DialTimeout, DNSRecordsTTL, DNSResolutionTimeout time.Duration, DNSCacheSize int, DNSServers []string, DNSConcurrency int, disableIPv4, disableIPv6 bool) (d *customDialer, err error) {
 	d = new(customDialer)
+
+	d.stats = httpClient.statsRegistry
+	d.logBackend = httpClient.logBackend
 
 	d.Timeout = DialTimeout
 	d.client = httpClient
 	d.disableIPv4 = disableIPv4
 	d.disableIPv6 = disableIPv6
 	d.dnsConcurrency = DNSConcurrency
+	d.allowDirectFallback = allowDirectFallback
 
 	DNScache, err := otter.MustBuilder[string, net.IP](DNSCacheSize).
 		// CollectStats(). // Uncomment this line to enable stats collection, can be useful later on
@@ -121,27 +160,161 @@ func newCustomDialer(httpClient *CustomHTTPClient, proxyURL string, DialTimeout,
 		Timeout: DNSResolutionTimeout,
 	}
 
-	if proxyURL != "" {
-		u, err := url.Parse(proxyURL)
+	// Initialize all proxies
+	for _, proxyConfig := range proxies {
+		if proxyConfig.URL == "" {
+			continue
+		}
+
+		// Validate that Network is explicitly set
+		if proxyConfig.Network == ProxyNetworkUnset {
+			return nil, fmt.Errorf("proxy %s: Network must be explicitly set to ProxyNetworkAny, ProxyNetworkIPv4, or ProxyNetworkIPv6", proxyConfig.URL)
+		}
+
+		u, err := url.Parse(proxyConfig.URL)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to parse proxy URL %s: %w", proxyConfig.URL, err)
 		}
 
 		var proxyDialer proxy.Dialer
 		if proxyDialer, err = proxy.FromURL(u, d); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to create proxy from URL %s: %w", proxyConfig.URL, err)
 		}
-
-		d.proxyDialer = proxyDialer.(proxy.ContextDialer)
 
 		// Determine if this proxy requires hostname (remote DNS) or can use IP (local DNS)
 		// Proxies with remote DNS: socks5h, socks4a, http, https
 		// Proxies with local DNS: socks5, socks4
-		d.proxyNeedsHostname = u.Scheme == "socks5h" || u.Scheme == "socks4a" ||
+		needsHostname := u.Scheme == "socks5h" || u.Scheme == "socks4a" ||
 			u.Scheme == "http" || u.Scheme == "https"
+
+		d.proxyDialers = append(d.proxyDialers, proxyDialerInfo{
+			dialer:         proxyDialer.(proxy.ContextDialer),
+			needsHostname:  needsHostname,
+			proxyNetwork:   proxyConfig.Network,
+			proxyType:      proxyConfig.Type,
+			allowedDomains: proxyConfig.AllowedDomains,
+			url:            proxyConfig.URL,
+			name:           proxyName(u),
+			stats:          httpClient.statsRegistry,
+		})
 	}
 
 	return d, nil
+}
+
+// selectProxy selects an appropriate proxy based on network type, domain, and context flags.
+// Returns nil if no proxy is available or should be used (direct connection).
+// Returns an error if proxies exist but none match the requirements and direct fallback is disabled.
+func (d *customDialer) selectProxy(ctx context.Context, network, address string) (*proxyDialerInfo, error) {
+	// No proxies configured, use direct connection
+	if len(d.proxyDialers) == 0 {
+		return nil, nil
+	}
+
+	// Extract hostname from address for domain matching
+	hostname, _, err := net.SplitHostPort(address)
+	if err != nil {
+		// If no port, treat the whole address as hostname
+		hostname = address
+	}
+
+	// Check if a specific proxy type is requested via context
+	var requestedProxyType *ProxyType
+	if ctx.Value(ContextKeyProxyType) != nil {
+		if val, ok := ctx.Value(ContextKeyProxyType).(ProxyType); ok {
+			requestedProxyType = &val
+		}
+	}
+
+	// Filter eligible proxies
+	var eligible []*proxyDialerInfo
+	for i := range d.proxyDialers {
+		proxy := &d.proxyDialers[i]
+
+		// Filter by proxy type (Mobile, Residential, Datacenter)
+		// If a specific type is requested, only use matching proxies
+		// If no type is requested, only use ProxyTypeAny proxies
+		if requestedProxyType != nil {
+			// Specific type requested: only match that exact type
+			if proxy.proxyType != *requestedProxyType {
+				continue
+			}
+		} else {
+			// No type requested: only use ProxyTypeAny proxies
+			if proxy.proxyType != ProxyTypeAny {
+				continue
+			}
+		}
+
+		// Filter by network type (IPv4/IPv6)
+		switch proxy.proxyNetwork {
+		case ProxyNetworkIPv4:
+			if strings.HasSuffix(network, "6") {
+				continue // Skip IPv6 networks
+			}
+		case ProxyNetworkIPv6:
+			if strings.HasSuffix(network, "4") {
+				continue // Skip IPv4 networks
+			}
+		case ProxyNetworkAny:
+			// Always eligible regardless of network type
+		}
+
+		// Filter by domain patterns
+		if len(proxy.allowedDomains) > 0 {
+			matched := false
+			for _, pattern := range proxy.allowedDomains {
+				// Use filepath.Match for glob pattern matching
+				// Note: filepath.Match doesn't support '**' but supports '*' and '?'
+				if match, _ := filepath.Match(pattern, hostname); match {
+					matched = true
+					break
+				}
+				// Also check if pattern matches a subdomain pattern
+				// For example, "*.example.com" should match "api.example.com"
+				if strings.HasPrefix(pattern, "*.") {
+					suffix := pattern[1:] // Remove the leading '*'
+					if strings.HasSuffix(hostname, suffix) || hostname == suffix[1:] {
+						matched = true
+						break
+					}
+				}
+			}
+			if !matched {
+				continue // Skip if domain doesn't match any pattern
+			}
+		}
+
+		eligible = append(eligible, proxy)
+	}
+
+	// No eligible proxies found
+	if len(eligible) == 0 {
+		if d.allowDirectFallback {
+			d.logBackend.Debug("no eligible proxies found, using direct connection", "network", network, "address", address)
+			return nil, nil // Use direct connection
+		}
+		proxyTypeStr := "any"
+		if requestedProxyType != nil {
+			proxyTypeStr = fmt.Sprintf("%v", *requestedProxyType)
+		}
+		d.logBackend.Error("no eligible proxies found and direct fallback disabled", "network", network, "address", address, "proxyType", proxyTypeStr)
+		return nil, fmt.Errorf("no eligible proxies found for network=%s, address=%s, proxyType=%s and direct fallback is disabled", network, address, proxyTypeStr)
+	}
+
+	// Round-robin selection among eligible proxies
+	startIdx := int(d.proxyRoundRobinIndex.Add(1)-1) % len(eligible)
+	selectedProxy := eligible[startIdx]
+
+	// Update proxy statistics
+	if selectedProxy.stats != nil {
+		selectedProxy.stats.RegisterCounter(proxyRequestsTotal, proxyRequestsTotalHelp, []string{"proxy"}).WithLabels(Labels{"proxy": selectedProxy.name}).Add(1)
+		selectedProxy.stats.RegisterGauge(proxyLastUsedNanoseconds, proxyLastUsedNanosecondsHelp, []string{"proxy"}).WithLabels(Labels{"proxy": selectedProxy.name}).Set(time.Now().UnixNano())
+	}
+
+	d.logBackend.Debug("proxy selected", "proxy", selectedProxy.name, "network", network, "address", address)
+
+	return selectedProxy, nil
 }
 
 type CustomConnection struct {
@@ -235,10 +408,16 @@ func (d *customDialer) CustomDialContext(ctx context.Context, network, address s
 		return nil, errors.New("no supported network type available")
 	}
 
+	// Select appropriate proxy based on context, network type, and domain
+	selectedProxy, err := d.selectProxy(ctx, network, address)
+	if err != nil {
+		return nil, err
+	}
+
 	var dialAddr string
 	var IP net.IP
 
-	if d.proxyDialer != nil && d.proxyNeedsHostname {
+	if selectedProxy != nil && selectedProxy.needsHostname {
 		// Remote DNS proxy (socks5h, socks4a, http, https)
 		// Skip DNS archiving to avoid privacy leak and ensure accuracy.
 		// The proxy will handle DNS resolution on its end, and we don't want to:
@@ -250,6 +429,7 @@ func (d *customDialer) CustomDialContext(ctx context.Context, network, address s
 		// Archive DNS and use resolved IP
 		IP, _, err = d.archiveDNS(ctx, address)
 		if err != nil {
+			d.logBackend.Error("DNS resolution failed", "address", address, "error", err)
 			return nil, err
 		}
 
@@ -261,10 +441,19 @@ func (d *customDialer) CustomDialContext(ctx context.Context, network, address s
 		}
 
 		dialAddr = net.JoinHostPort(IP.String(), port)
+		d.logBackend.Debug("DNS resolved", "address", address, "ip", IP.String())
 	}
 
-	if d.proxyDialer != nil {
-		conn, err = d.proxyDialer.DialContext(ctx, network, dialAddr)
+	if selectedProxy != nil {
+		conn, err = selectedProxy.dialer.DialContext(ctx, network, dialAddr)
+		if err != nil {
+			d.logBackend.Error("proxy connection failed", "proxy", selectedProxy.name, "address", dialAddr, "error", err)
+			if selectedProxy.stats != nil {
+				selectedProxy.stats.RegisterCounter(proxyErrorsTotal, proxyErrorsTotalHelp, []string{"proxy"}).WithLabels(Labels{"proxy": selectedProxy.name}).Add(1)
+			}
+		} else {
+			d.logBackend.Debug("connection established via proxy", "proxy", selectedProxy.name, "address", dialAddr)
+		}
 	} else {
 		if d.client.randomLocalIP {
 			localAddr := getLocalAddr(network, IP)
@@ -279,6 +468,11 @@ func (d *customDialer) CustomDialContext(ctx context.Context, network, address s
 		}
 
 		conn, err = d.DialContext(ctx, network, dialAddr)
+		if err != nil {
+			d.logBackend.Error("direct connection failed", "address", dialAddr, "error", err)
+		} else {
+			d.logBackend.Debug("direct connection established", "address", dialAddr)
+		}
 	}
 
 	if err != nil {
@@ -299,11 +493,16 @@ func (d *customDialer) CustomDialTLSContext(ctx context.Context, network, addres
 		return nil, errors.New("no supported network type available")
 	}
 
+	// Select appropriate proxy based on context, network type, and domain
+	selectedProxy, err := d.selectProxy(ctx, network, address)
+	if err != nil {
+		return nil, err
+	}
+
 	var dialAddr string
 	var IP net.IP
-	var err error
 
-	if d.proxyDialer != nil && d.proxyNeedsHostname {
+	if selectedProxy != nil && selectedProxy.needsHostname {
 		// Remote DNS proxy (socks5h, socks4a, http, https)
 		// Skip DNS archiving to avoid privacy leak and ensure accuracy.
 		// The proxy will handle DNS resolution on its end, and we don't want to:
@@ -315,6 +514,7 @@ func (d *customDialer) CustomDialTLSContext(ctx context.Context, network, addres
 		// Archive DNS and use resolved IP
 		IP, _, err = d.archiveDNS(ctx, address)
 		if err != nil {
+			d.logBackend.Error("DNS resolution failed for TLS connection", "address", address, "error", err)
 			return nil, err
 		}
 
@@ -326,12 +526,16 @@ func (d *customDialer) CustomDialTLSContext(ctx context.Context, network, addres
 		}
 
 		dialAddr = net.JoinHostPort(IP.String(), port)
+		d.logBackend.Debug("DNS resolved for TLS connection", "address", address, "ip", IP.String())
 	}
 
 	var plainConn net.Conn
 
-	if d.proxyDialer != nil {
-		plainConn, err = d.proxyDialer.DialContext(ctx, network, dialAddr)
+	if selectedProxy != nil {
+		plainConn, err = selectedProxy.dialer.DialContext(ctx, network, dialAddr)
+		if err != nil && selectedProxy.stats != nil {
+			selectedProxy.stats.RegisterCounter(proxyErrorsTotal, proxyErrorsTotalHelp, []string{"proxy"}).WithLabels(Labels{"proxy": selectedProxy.name}).Add(1)
+		}
 	} else {
 		if d.client.randomLocalIP {
 			localAddr := getLocalAddr(network, IP)
@@ -367,11 +571,26 @@ func (d *customDialer) CustomDialTLSContext(ctx context.Context, network, addres
 	defer cancel()
 
 	if err := tlsConn.HandshakeContext(handshakeCtx); err != nil {
+		// Track TLS handshake errors for proxy connections
+		if selectedProxy != nil {
+			d.logBackend.Error("TLS handshake failed via proxy", "proxy", selectedProxy.name, "address", address, "error", err)
+			if selectedProxy.stats != nil {
+				selectedProxy.stats.RegisterCounter(proxyErrorsTotal, proxyErrorsTotalHelp, []string{"proxy"}).WithLabels(Labels{"proxy": selectedProxy.name}).Add(1)
+			}
+		} else {
+			d.logBackend.Error("TLS handshake failed", "address", address, "error", err)
+		}
 		closeErr := plainConn.Close()
 		if closeErr != nil {
 			return nil, fmt.Errorf("CustomDialTLS: TLS handshake failed and closing plain connection failed: %s", closeErr.Error())
 		}
 		return nil, fmt.Errorf("CustomDialTLS: TLS handshake failed: %w", err)
+	}
+
+	if selectedProxy != nil {
+		d.logBackend.Debug("TLS connection established via proxy", "proxy", selectedProxy.name, "address", address)
+	} else {
+		d.logBackend.Debug("TLS connection established", "address", address)
 	}
 
 	return d.wrapConnection(ctx, tlsConn, "https"), nil
@@ -448,17 +667,11 @@ func (d *customDialer) writeWARCFromConnection(ctx context.Context, reqPipe, res
 	close(recordChan)
 
 	if readErr != nil {
-		d.client.ErrChan <- &Error{
-			Err:  readErr,
-			Func: "writeWARCFromConnection",
-		}
+		d.logBackend.Error("error reading from connection", "func", "writeWARCFromConnection", "error", readErr)
 
 		for record := range recordChan {
 			if closeErr := record.Content.Close(); closeErr != nil {
-				d.client.ErrChan <- &Error{
-					Err:  closeErr,
-					Func: "writeWARCFromConnection",
-				}
+				d.logBackend.Error("error closing record content", "func", "writeWARCFromConnection", "error", closeErr)
 			}
 		}
 
@@ -477,14 +690,11 @@ func (d *customDialer) writeWARCFromConnection(ctx context.Context, reqPipe, res
 
 	if len(batch.Records) != 2 {
 		err.Err = errors.New("warc: there was an unspecified problem creating one of the WARC records")
-		d.client.ErrChan <- err
+		d.logBackend.Error("failed to create WARC records", "func", err.Func, "error", err.Err)
 
 		for _, record := range batch.Records {
 			if closeErr := record.Content.Close(); closeErr != nil {
-				d.client.ErrChan <- &Error{
-					Err:  closeErr,
-					Func: "writeWARCFromConnection",
-				}
+				d.logBackend.Error("error closing record content", "func", "writeWARCFromConnection", "error", closeErr)
 			}
 		}
 
@@ -511,7 +721,7 @@ func (d *customDialer) writeWARCFromConnection(ctx context.Context, reqPipe, res
 		case <-ctx.Done():
 			return
 		default:
-			if d.proxyDialer == nil {
+			if len(d.proxyDialers) == 0 {
 				switch addr := conn.RemoteAddr().(type) {
 				case *net.TCPAddr:
 					IP := addr.IP.String()
@@ -530,19 +740,13 @@ func (d *customDialer) writeWARCFromConnection(ctx context.Context, reqPipe, res
 			r.Header.Set("WARC-Target-URI", warcTargetURI)
 
 			if _, seekErr := r.Content.Seek(0, 0); seekErr != nil {
-				d.client.ErrChan <- &Error{
-					Err:  seekErr,
-					Func: "writeWARCFromConnection",
-				}
+				d.logBackend.Error("error seeking record content", "func", "writeWARCFromConnection", "error", seekErr)
 				return
 			}
 
 			digest, err := GetDigest(r.Content, d.client.DigestAlgorithm)
 			if err != nil {
-				d.client.ErrChan <- &Error{
-					Err:  err,
-					Func: "writeWARCFromConnection",
-				}
+				d.logBackend.Error("error calculating digest", "func", "writeWARCFromConnection", "error", err)
 				return
 			}
 
@@ -553,10 +757,7 @@ func (d *customDialer) writeWARCFromConnection(ctx context.Context, reqPipe, res
 				if r.Header.Get("WARC-Type") == "response" && !slices.Contains(emptyPayloadDigests, r.Header.Get("WARC-Payload-Digest")) {
 					captureTime, timeConversionErr := time.Parse(time.RFC3339, batch.CaptureTime)
 					if timeConversionErr != nil {
-						d.client.ErrChan <- &Error{
-							Err:  timeConversionErr,
-							Func: "writeWARCFromConnection.timeConversionErr",
-						}
+						d.logBackend.Error("error parsing capture time", "func", "writeWARCFromConnection", "error", timeConversionErr)
 						return
 					}
 					d.client.dedupeHashTable.Store(r.Header.Get("WARC-Payload-Digest"), revisitRecord{
@@ -645,8 +846,8 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 		if d.client.dedupeOptions.LocalDedupe {
 			revisit = d.checkLocalRevisit(payloadDigest)
 			if revisit.targetURI != "" {
-				LocalDedupeTotalBytes.Add(int64(revisit.size))
-				LocalDedupeTotal.Add(1)
+				d.stats.RegisterCounter(localDedupedBytesTotal, localDedupedBytesTotalHelp, nil).WithLabels(nil).Add(int64(revisit.size))
+				d.stats.RegisterCounter(localDedupedTotal, localDedupedTotalHelp, nil).WithLabels(nil).Add(1)
 			}
 		}
 
@@ -655,8 +856,8 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 		if d.client.dedupeOptions.DoppelgangerDedupe && d.client.DigestAlgorithm == SHA1 && revisit.targetURI == "" {
 			revisit, _ = checkDoppelgangerRevisit(d.client.dedupeOptions.DoppelgangerHost, payloadDigest, warcTargetURI)
 			if revisit.targetURI != "" {
-				DoppelgangerDedupeTotalBytes.Add(bytesCopied)
-				DoppelgangerDedupeTotal.Add(1)
+				d.stats.RegisterCounter(doppelgangerDedupedBytesTotal, doppelgangerDedupedBytesTotalHelp, nil).WithLabels(nil).Add(bytesCopied)
+				d.stats.RegisterCounter(doppelgangerDedupedTotal, doppelgangerDedupedTotalHelp, nil).WithLabels(nil).Add(1)
 			}
 		}
 
@@ -664,8 +865,8 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 		if d.client.dedupeOptions.CDXDedupe && d.client.DigestAlgorithm == SHA1 && revisit.targetURI == "" {
 			revisit, _ = checkCDXRevisit(d.client.dedupeOptions.CDXURL, payloadDigest, warcTargetURI, d.client.dedupeOptions.CDXCookie)
 			if revisit.targetURI != "" {
-				CDXDedupeTotalBytes.Add(bytesCopied)
-				CDXDedupeTotal.Add(1)
+				d.stats.RegisterCounter(cdxDedupedBytesTotal, cdxDedupedBytesTotalHelp, nil).WithLabels(nil).Add(bytesCopied)
+				d.stats.RegisterCounter(cdxDedupedTotal, cdxDedupedTotalHelp, nil).WithLabels(nil).Add(1)
 			}
 		}
 	}

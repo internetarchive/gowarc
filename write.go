@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/internetarchive/gowarc/pkg/spooledtempfile"
 	"github.com/google/uuid"
+	"github.com/internetarchive/gowarc/pkg/spooledtempfile"
 	"github.com/klauspost/compress/zstd"
 )
 
@@ -22,6 +22,9 @@ type Writer struct {
 	Compression     string
 	DigestAlgorithm DigestAlgorithm
 	ParallelGZIP    bool
+
+	stats      StatsRegistry
+	logBackend LogBackend
 }
 
 // RecordBatch is a structure that contains a bunch of
@@ -104,11 +107,13 @@ func (w *Writer) WriteRecord(r *Record) (recordID string, err error) {
 
 	r.Content.Seek(0, 0)
 	if written, err = io.Copy(w.FileWriter, r.Content); err != nil {
+		w.logBackend.Error("failed to write WARC record content", "file", w.FileName, "error", err)
 		return recordID, err
 	}
 
 	if written > 0 {
-		DataTotal.Add(written)
+		w.stats.RegisterCounter(totalDataWritten, totalDataWrittenHelp, nil).WithLabels(nil).Add(written)
+		w.logBackend.Debug("WARC record written", "file", w.FileName, "bytes", written, "recordID", recordID)
 	}
 
 	if _, err := io.WriteString(w.FileWriter, "\r\n\r\n"); err != nil {
