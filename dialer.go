@@ -73,7 +73,7 @@ type customDialer struct {
 	client             *CustomHTTPClient
 	DNSConfig          *dns.ClientConfig
 	DNSClient          dnsExchanger
-	DNSRecords         *otter.Cache[string, net.IP]
+	DNSRecords         *otter.Cache[string, dnsResult]
 	net.Dialer
 	disableIPv4        bool
 	disableIPv6        bool
@@ -88,6 +88,120 @@ var emptyPayloadDigests = []string{
 	"blake3:af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262",
 }
 
+// happyEyeballsDelay is the delay before attempting to start the fallback connection. Go defaults to 300ms. We will too.
+const happyEyeballsDelay = 300 * time.Millisecond
+
+// dialResult holds the outcome of a dial attempt for Happy Eyeballs
+type dialResult struct {
+	conn    net.Conn
+	err     error
+	primary bool
+	done    bool
+	ip      net.IP
+}
+
+// dialParallel races two dial attempts, giving the primary (IPv6) a head start.
+// It returns the first established connection and closes the other.
+// Otherwise it returns an error from the primary address.
+// This implements Happy Eyeballs (RFC 8305).
+func (d *customDialer) dialParallel(ctx context.Context, network string, primaryAddr, fallbackAddr string, primaryIP, fallbackIP net.IP) (net.Conn, net.IP, error) {
+	if fallbackAddr == "" && primaryAddr == "" {
+		return nil, nil, errors.New("no addresses available")
+	}
+	if fallbackAddr == "" {
+		conn, err := d.dialSingle(ctx, network+"6", primaryAddr, primaryIP)
+		return conn, primaryIP, err
+	}
+	if primaryAddr == "" {
+		conn, err := d.dialSingle(ctx, network+"4", fallbackAddr, fallbackIP)
+		return conn, fallbackIP, err
+	}
+
+	returned := make(chan struct{})
+	defer close(returned)
+
+	results := make(chan dialResult)
+
+	startRacer := func(ctx context.Context, primary bool) {
+		var addr string
+		var ip net.IP
+		var netType string
+		if primary {
+			addr, ip, netType = primaryAddr, primaryIP, network+"6"
+		} else {
+			addr, ip, netType = fallbackAddr, fallbackIP, network+"4"
+		}
+		conn, err := d.dialSingle(ctx, netType, addr, ip)
+		select {
+		case results <- dialResult{conn: conn, err: err, primary: primary, done: true, ip: ip}:
+		case <-returned:
+			if conn != nil {
+				conn.Close()
+			}
+		}
+	}
+
+	var primary, fallback dialResult
+
+	// Start the primary racer (IPv6)
+	primaryCtx, primaryCancel := context.WithCancel(ctx)
+	defer primaryCancel()
+	go startRacer(primaryCtx, true)
+
+	// Start the timer for the fallback racer (IPv4)
+	fallbackTimer := time.NewTimer(happyEyeballsDelay)
+	defer fallbackTimer.Stop()
+
+	for {
+		select {
+		case <-fallbackTimer.C:
+			fallbackCtx, fallbackCancel := context.WithCancel(ctx)
+			defer fallbackCancel()
+			go startRacer(fallbackCtx, false)
+
+		case res := <-results:
+			if res.err == nil {
+				return res.conn, res.ip, nil
+			}
+			if res.primary {
+				primary = res
+			} else {
+				fallback = res
+			}
+			if primary.done && fallback.done {
+				return nil, nil, primary.err
+			}
+			// If primary fails before timer fires, start fallback immediately
+			if res.primary && fallbackTimer.Stop() {
+				fallbackTimer.Reset(0)
+			}
+		}
+	}
+}
+
+// dialSingle performs a single dial attempt
+func (d *customDialer) dialSingle(ctx context.Context, network, address string, resolvedIP net.IP) (net.Conn, error) {
+	if d.proxyDialer != nil {
+		return d.proxyDialer.DialContext(ctx, network, address)
+	}
+
+	if d.client.randomLocalIP {
+		localAddr := getLocalAddr(network, resolvedIP)
+		if localAddr != nil {
+			dialer := d.Dialer // copy to avoid races
+			switch network {
+			case "tcp", "tcp4", "tcp6":
+				dialer.LocalAddr = localAddr.(*net.TCPAddr)
+			case "udp", "udp4", "udp6":
+				dialer.LocalAddr = localAddr.(*net.UDPAddr)
+			}
+			return dialer.DialContext(ctx, network, address)
+		}
+	}
+
+	return d.DialContext(ctx, network, address)
+}
+
 func newCustomDialer(httpClient *CustomHTTPClient, proxyURL string, DialTimeout, DNSRecordsTTL, DNSResolutionTimeout time.Duration, DNSCacheSize int, DNSServers []string, DNSConcurrency int, disableIPv4, disableIPv6 bool) (d *customDialer, err error) {
 	d = new(customDialer)
 
@@ -97,7 +211,7 @@ func newCustomDialer(httpClient *CustomHTTPClient, proxyURL string, DialTimeout,
 	d.disableIPv6 = disableIPv6
 	d.dnsConcurrency = DNSConcurrency
 
-	DNScache, err := otter.MustBuilder[string, net.IP](DNSCacheSize).
+	DNScache, err := otter.MustBuilder[string, dnsResult](DNSCacheSize).
 		// CollectStats(). // Uncomment this line to enable stats collection, can be useful later on
 		WithTTL(DNSRecordsTTL).
 		Build()
@@ -229,57 +343,40 @@ func (d *customDialer) wrapConnection(ctx context.Context, c net.Conn, scheme st
 }
 
 func (d *customDialer) CustomDialContext(ctx context.Context, network, address string) (conn net.Conn, err error) {
-	// Determine the network based on IPv4/IPv6 settings
-	network = d.getNetworkType(network)
-	if network == "" {
-		return nil, errors.New("no supported network type available")
-	}
-
-	var dialAddr string
-	var IP net.IP
-
 	if d.proxyDialer != nil && d.proxyNeedsHostname {
 		// Remote DNS proxy (socks5h, socks4a, http, https)
 		// Skip DNS archiving to avoid privacy leak and ensure accuracy.
-		// The proxy will handle DNS resolution on its end, and we don't want to:
-		// 1. Leak DNS queries to local DNS servers (defeats purpose of socks5h)
-		// 2. Archive potentially incorrect DNS results (local DNS may differ from proxy's DNS)
-		dialAddr = address
-	} else {
-		// Direct connection or local DNS proxy (socks5, socks4)
-		// Archive DNS and use resolved IP
-		IP, _, err = d.archiveDNS(ctx, address)
+		conn, err = d.proxyDialer.DialContext(ctx, network, address)
+
 		if err != nil {
 			return nil, err
 		}
-
-		// Extract port from address for IP:port construction
-		var port string
-		_, port, err = net.SplitHostPort(address)
-		if err != nil {
-			return nil, fmt.Errorf("failed to extract port from address %s: %w", address, err)
-		}
-
-		dialAddr = net.JoinHostPort(IP.String(), port)
+		return d.wrapConnection(ctx, conn, "http"), nil
 	}
 
-	if d.proxyDialer != nil {
-		conn, err = d.proxyDialer.DialContext(ctx, network, dialAddr)
-	} else {
-		if d.client.randomLocalIP {
-			localAddr := getLocalAddr(network, IP)
-			if localAddr != nil {
-				switch network {
-				case "tcp", "tcp4", "tcp6":
-					d.LocalAddr = localAddr.(*net.TCPAddr)
-				case "udp", "udp4", "udp6":
-					d.LocalAddr = localAddr.(*net.UDPAddr)
-				}
-			}
-		}
-
-		conn, err = d.DialContext(ctx, network, dialAddr)
+	// Direct connection or local DNS proxy (socks5, socks4)
+	// Archive DNS and get both IPv4 and IPv6 addresses
+	ipv4, ipv6, _, err := d.archiveDNS(ctx, address)
+	if err != nil {
+		return nil, err
 	}
+
+	// Extract port from address
+	_, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, fmt.Errorf("failed to extract port from address %s: %w", address, err)
+	}
+	// Build dial addresses for each address family
+	var ipv4Addr, ipv6Addr string
+	if ipv4 != nil {
+		ipv4Addr = net.JoinHostPort(ipv4.String(), port)
+	}
+	if ipv6 != nil {
+		ipv6Addr = net.JoinHostPort(ipv6.String(), port)
+	}
+
+	// Use Happy Eyeballs: IPv6 primary, IPv4 fallback
+	conn, _, err = d.dialParallel(ctx, network, ipv6Addr, ipv4Addr, ipv6, ipv4)
 
 	if err != nil {
 		return nil, err
@@ -293,63 +390,45 @@ func (d *customDialer) CustomDial(network, address string) (net.Conn, error) {
 }
 
 func (d *customDialer) CustomDialTLSContext(ctx context.Context, network, address string) (net.Conn, error) {
-	// Determine the network based on IPv4/IPv6 settings
-	network = d.getNetworkType(network)
-	if network == "" {
-		return nil, errors.New("no supported network type available")
-	}
-
-	var dialAddr string
-	var IP net.IP
+	var plainConn net.Conn
 	var err error
 
 	if d.proxyDialer != nil && d.proxyNeedsHostname {
 		// Remote DNS proxy (socks5h, socks4a, http, https)
 		// Skip DNS archiving to avoid privacy leak and ensure accuracy.
-		// The proxy will handle DNS resolution on its end, and we don't want to:
-		// 1. Leak DNS queries to local DNS servers (defeats purpose of socks5h)
-		// 2. Archive potentially incorrect DNS results (local DNS may differ from proxy's DNS)
-		dialAddr = address
-	} else {
-		// Direct connection or local DNS proxy (socks5, socks4)
-		// Archive DNS and use resolved IP
-		IP, _, err = d.archiveDNS(ctx, address)
+		plainConn, err = d.proxyDialer.DialContext(ctx, network, address)
 		if err != nil {
 			return nil, err
 		}
 
-		// Extract port from address for IP:port construction
-		var port string
-		_, port, err = net.SplitHostPort(address)
+	} else {
+		// Direct connection or local DNS proxy (socks5, socks4)
+		// Archive DNS and get both IPv4 and IPv6 addresses
+		ipv4, ipv6, _, err := d.archiveDNS(ctx, address)
+		if err != nil {
+			return nil, err
+		}
+
+		// Extract port from address
+		_, port, err := net.SplitHostPort(address)
 		if err != nil {
 			return nil, fmt.Errorf("failed to extract port from address %s: %w", address, err)
 		}
 
-		dialAddr = net.JoinHostPort(IP.String(), port)
-	}
-
-	var plainConn net.Conn
-
-	if d.proxyDialer != nil {
-		plainConn, err = d.proxyDialer.DialContext(ctx, network, dialAddr)
-	} else {
-		if d.client.randomLocalIP {
-			localAddr := getLocalAddr(network, IP)
-			if localAddr != nil {
-				switch network {
-				case "tcp", "tcp4", "tcp6":
-					d.LocalAddr = localAddr.(*net.TCPAddr)
-				case "udp", "udp4", "udp6":
-					d.LocalAddr = localAddr.(*net.UDPAddr)
-				}
-			}
+		// Build dial addresses for each address family
+		var ipv4Addr, ipv6Addr string
+		if ipv4 != nil {
+			ipv4Addr = net.JoinHostPort(ipv4.String(), port)
+		}
+		if ipv6 != nil {
+			ipv6Addr = net.JoinHostPort(ipv6.String(), port)
 		}
 
-		plainConn, err = d.DialContext(ctx, network, dialAddr)
-	}
-
-	if err != nil {
-		return nil, err
+		// Use Happy Eyeballs: IPv6 primary, IPv4 fallback
+		plainConn, _, err = d.dialParallel(ctx, network, ipv6Addr, ipv4Addr, ipv6, ipv4)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	cfg := &tls.Config{
@@ -360,6 +439,7 @@ func (d *customDialer) CustomDialTLSContext(ctx context.Context, network, addres
 	tlsConn := tls.UClient(plainConn, cfg, tls.HelloCustom)
 
 	if err := tlsConn.ApplyPreset(getCustomTLSSpec()); err != nil {
+		plainConn.Close()
 		return nil, err
 	}
 
@@ -367,10 +447,7 @@ func (d *customDialer) CustomDialTLSContext(ctx context.Context, network, addres
 	defer cancel()
 
 	if err := tlsConn.HandshakeContext(handshakeCtx); err != nil {
-		closeErr := plainConn.Close()
-		if closeErr != nil {
-			return nil, fmt.Errorf("CustomDialTLS: TLS handshake failed and closing plain connection failed: %s", closeErr.Error())
-		}
+		plainConn.Close()
 		return nil, fmt.Errorf("CustomDialTLS: TLS handshake failed: %w", err)
 	}
 
@@ -379,31 +456,6 @@ func (d *customDialer) CustomDialTLSContext(ctx context.Context, network, addres
 
 func (d *customDialer) CustomDialTLS(network, address string) (net.Conn, error) {
 	return d.CustomDialTLSContext(context.Background(), network, address)
-}
-
-func (d *customDialer) getNetworkType(network string) string {
-	switch network {
-	case "tcp", "udp":
-		if d.disableIPv4 && !d.disableIPv6 {
-			return network + "6"
-		}
-		if !d.disableIPv4 && d.disableIPv6 {
-			return network + "4"
-		}
-		return network // Both enabled or both disabled, use default
-	case "tcp4", "udp4":
-		if d.disableIPv4 {
-			return ""
-		}
-		return network
-	case "tcp6", "udp6":
-		if d.disableIPv6 {
-			return ""
-		}
-		return network
-	default:
-		return "" // Unsupported network type
-	}
 }
 
 func (d *customDialer) writeWARCFromConnection(ctx context.Context, reqPipe, respPipe *io.PipeReader, scheme string, conn net.Conn) {
@@ -592,7 +644,7 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 	// Read the response from the pipe
 	bytesCopied, err := io.Copy(responseRecord.Content, respPipe)
 	if err != nil {
-		return fmt.Errorf("readResponse: io.Copy failed: %s", err.Error())
+		return errors.New("readResponse: io.Copy failed: " + err.Error())
 	}
 
 	select {
@@ -629,12 +681,12 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 	// Calculate the WARC-Payload-Digest
 	payloadDigest, err := GetDigest(resp.Body, d.client.DigestAlgorithm)
 	if err != nil {
-		return fmt.Errorf("readResponse: payload digest calculation failed: %s", err.Error())
+		return errors.New("readResponse: payload digest calculation failed: " + err.Error())
 	}
 
 	err = resp.Body.Close()
 	if err != nil {
-		return fmt.Errorf("readResponse: closing body after digest calculation failed: %s", err.Error())
+		return errors.New("readResponse: closing body after digest calculation failed: " + err.Error())
 	}
 
 	responseRecord.Header.Set("WARC-Payload-Digest", payloadDigest)
@@ -685,7 +737,7 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 		// Find the position of the end of the headers
 		endOfHeadersOffset, err := findEndOfHeadersOffset(responseRecord.Content)
 		if err != nil {
-			return fmt.Errorf("readResponse: %s", err.Error())
+			return errors.New("readResponse: " + err.Error())
 		}
 		// This should really never happen! This could be the result of a malfunctioning HTTP server or something currently unknown!
 		if endOfHeadersOffset == -1 {
@@ -702,7 +754,7 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 			if n > 0 {
 				_, err = tempBuffer.Write(block)
 				if err != nil {
-					return fmt.Errorf("readResponse: could not write to temporary buffer: %s", err.Error())
+					return errors.New("readResponse: could not write to temporary buffer: " + err.Error())
 				}
 			}
 
@@ -711,7 +763,7 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 			}
 
 			if err != nil {
-				return fmt.Errorf("readResponse: could not read from response content: %s", err.Error())
+				return errors.New("readResponse: could not read from response content: " + err.Error())
 			}
 
 			wrote++
@@ -724,7 +776,7 @@ func (d *customDialer) readResponse(ctx context.Context, respPipe *io.PipeReader
 		// Close old buffer
 		err = responseRecord.Content.Close()
 		if err != nil {
-			return fmt.Errorf("readResponse: could not close old content buffer: %s", err.Error())
+			return errors.New("readResponse: could not close old content buffer: " + err.Error())
 		}
 		responseRecord.Content = tempBuffer
 	}
@@ -799,7 +851,7 @@ func findEndOfHeadersOffset(content io.ReadSeeker) (int, error) {
 func parseRequestTargetURI(scheme string, content io.ReadSeeker) (string, error) {
 	// Ensure the reader is at the beginning
 	if _, err := content.Seek(0, io.SeekStart); err != nil {
-		return "", fmt.Errorf("parseRequestTargetURI: seek failed: %w", err)
+		return "", errors.New("parseRequestTargetURI: seek failed: " + err.Error())
 	}
 
 	reader := bufio.NewReaderSize(content, 4096)
@@ -823,7 +875,7 @@ func parseRequestTargetURI(scheme string, content io.ReadSeeker) (string, error)
 			if err == io.EOF {
 				break
 			}
-			return "", fmt.Errorf("parseRequestTargetURI: read line failed: %w", err)
+			return "", errors.New("parseRequestTargetURI: read line failed: " + err.Error())
 		}
 
 		line = strings.TrimSpace(line)
@@ -863,7 +915,8 @@ func parseRequestTargetURI(scheme string, content io.ReadSeeker) (string, error)
 	if strings.HasPrefix(target, scheme+"://"+host) {
 		return target, nil
 	}
-	return fmt.Sprintf("%s://%s%s", scheme, host, target), nil
+	// Use string concatenation instead of fmt.Sprintf to reduce allocations
+	return scheme + "://" + host + target, nil
 }
 
 func (d *customDialer) readRequest(ctx context.Context, scheme string, reqPipe *io.PipeReader, targetURITxCh chan string, recordChan chan *Record) error {
@@ -880,12 +933,12 @@ func (d *customDialer) readRequest(ctx context.Context, scheme string, reqPipe *
 	// Copy the content from the pipe
 	_, err := io.Copy(requestRecord.Content, reqPipe)
 	if err != nil {
-		return fmt.Errorf("readRequest: io.Copy failed: %s", err.Error())
+		return errors.New("readRequest: io.Copy failed: " + err.Error())
 	}
 
 	warcTargetURI, err := parseRequestTargetURI(scheme, requestRecord.Content)
 	if err != nil {
-		return fmt.Errorf("readRequest: %w", err)
+		return errors.New("readRequest: " + err.Error())
 	}
 
 	// Send the WARC-Target-URI to a channel so that it can be picked up

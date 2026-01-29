@@ -7,38 +7,6 @@ import (
 	"testing"
 )
 
-func TestGetNetworkType(t *testing.T) {
-	d := &customDialer{}
-	// Default: both disabled = default
-	got := d.getNetworkType("tcp")
-	if got != "tcp" {
-		t.Errorf("expected tcp, got %s", got)
-	}
-
-	d.disableIPv4 = true
-	got = d.getNetworkType("tcp")
-	if got != "tcp6" {
-		t.Errorf("expected tcp6, got %s", got)
-	}
-
-	d.disableIPv4 = false
-	d.disableIPv6 = true
-	got = d.getNetworkType("tcp")
-	if got != "tcp4" {
-		t.Errorf("expected tcp4, got %s", got)
-	}
-
-	got = d.getNetworkType("tcp4")
-	if got != "tcp4" {
-		t.Errorf("expected tcp4, got %s", got)
-	}
-	d.disableIPv4 = true
-	got = d.getNetworkType("tcp4")
-	if got != "" {
-		t.Errorf("expected empty string, got %s", got)
-	}
-}
-
 func TestParseRequestTargetURI(t *testing.T) {
 	// valid minimal request
 	raw := `GET /index.html HTTP/1.0
