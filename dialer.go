@@ -377,7 +377,7 @@ func (d *customDialer) CustomDialContext(ctx context.Context, network, address s
 	}
 
 	// Use Happy Eyeballs: IPv6 primary, IPv4 fallback
-	conn, _, err = d.dialParallel(ctx, "tcp", ipv6Addr, ipv4Addr, ipv6, ipv4)
+	conn, _, err = d.dialParallel(ctx, network, ipv6Addr, ipv4Addr, ipv6, ipv4)
 
 	if err != nil {
 		return nil, err
