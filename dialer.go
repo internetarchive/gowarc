@@ -373,7 +373,6 @@ func (d *customDialer) CustomDialContext(ctx context.Context, network, address s
 	}
 	if ipv6 != nil {
 		ipv6Addr = net.JoinHostPort(ipv6.String(), port)
-
 	}
 
 	// Use Happy Eyeballs: IPv6 primary, IPv4 fallback
