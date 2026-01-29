@@ -263,8 +263,9 @@ func TestNormalDNSResolution(t *testing.T) {
 	if !ok {
 		t.Error("Cache not working")
 	}
-	// Check that at least one of the cached IPs matches what was resolved
-	if (ipv4 != nil && cachedResult.ipv4.String() != ipv4.String()) &&
+	// Check that all resolved IPs match the cache
+	// Error if any resolved IP doesn't match its cached counterpart
+	if (ipv4 != nil && cachedResult.ipv4.String() != ipv4.String()) ||
 		(ipv6 != nil && cachedResult.ipv6.String() != ipv6.String()) {
 		t.Error("Cached IP not matching resolved IP")
 	}
