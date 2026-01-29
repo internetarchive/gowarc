@@ -32,20 +32,11 @@ type RotatorSettings struct {
 	WARCSize float64
 	// WARCWriterPoolSize defines the number of parallel WARC writers
 	WARCWriterPoolSize int
+	// StatsRegistry is used to store stats about gowarc
+	StatsRegistry StatsRegistry
+	// LogBackend is used to log events from gowarc
+	LogBackend LogBackend
 }
-
-var (
-	// Create a couple of counters for tracking various stats
-	DataTotal atomic.Int64
-
-	CDXDedupeTotalBytes          atomic.Int64
-	DoppelgangerDedupeTotalBytes atomic.Int64
-	LocalDedupeTotalBytes        atomic.Int64
-
-	CDXDedupeTotal          atomic.Int64
-	DoppelgangerDedupeTotal atomic.Int64
-	LocalDedupeTotal        atomic.Int64
-)
 
 // NewWARCRotator creates and return a channel that can be used
 // to communicate records to be written to WARC files to the
@@ -113,13 +104,14 @@ func recordWriter(settings *RotatorSettings, records chan *RecordBatch, done cha
 	)
 
 	// Create and open the initial file
+	settings.LogBackend.Info("creating initial WARC file", "file", currentFileName)
 	warcFile, err := os.Create(settings.OutputDirectory + currentFileName)
 	if err != nil {
 		panic(err)
 	}
 
 	// Initialize WARC writer
-	warcWriter, err := NewWriter(warcFile, currentFileName, settings.digestAlgorithm, settings.Compression, "", true, dictionary)
+	warcWriter, err := NewWriter(warcFile, currentFileName, settings.digestAlgorithm, settings.Compression, "", true, dictionary, settings.StatsRegistry, settings.LogBackend)
 	if err != nil {
 		panic(err)
 	}
@@ -137,7 +129,7 @@ func recordWriter(settings *RotatorSettings, records chan *RecordBatch, done cha
 			panic(err)
 		}
 
-		warcWriter, err = NewWriter(warcFile, currentFileName, settings.digestAlgorithm, settings.Compression, "", false, dictionary)
+		warcWriter, err = NewWriter(warcFile, currentFileName, settings.digestAlgorithm, settings.Compression, "", false, dictionary, settings.StatsRegistry, settings.LogBackend)
 		if err != nil {
 			panic(err)
 		}
@@ -148,6 +140,7 @@ func recordWriter(settings *RotatorSettings, records chan *RecordBatch, done cha
 		if more {
 			if isFileSizeExceeded(warcFile, settings.WARCSize) {
 				// WARC file size exceeded settings.WarcSize
+				settings.LogBackend.Info("WARC file size limit exceeded, rotating to new file", "currentFile", currentFileName, "sizeLimit", settings.WARCSize)
 				// The WARC file is renamed to remove the .open suffix
 				err := os.Rename(path.Join(settings.OutputDirectory, currentFileName), strings.TrimSuffix(path.Join(settings.OutputDirectory, currentFileName), ".open"))
 				if err != nil {
@@ -170,13 +163,14 @@ func recordWriter(settings *RotatorSettings, records chan *RecordBatch, done cha
 
 				// Create the new file and automatically increment the serial inside of GenerateWarcFileName
 				currentFileName = getNextWARCFilename(settings.OutputDirectory, settings.Prefix, settings.Compression, serial)
+				settings.LogBackend.Info("creating new WARC file after rotation", "file", currentFileName)
 				warcFile, err = os.Create(settings.OutputDirectory + currentFileName)
 				if err != nil {
 					panic(err)
 				}
 
 				// Initialize new WARC writer
-				warcWriter, err = NewWriter(warcFile, currentFileName, settings.digestAlgorithm, settings.Compression, "", true, dictionary)
+				warcWriter, err = NewWriter(warcFile, currentFileName, settings.digestAlgorithm, settings.Compression, "", true, dictionary, settings.StatsRegistry, settings.LogBackend)
 				if err != nil {
 					panic(err)
 				}
@@ -198,7 +192,7 @@ func recordWriter(settings *RotatorSettings, records chan *RecordBatch, done cha
 
 			// Write all the records of the record batch
 			for _, record := range recordBatch.Records {
-				warcWriter, err = NewWriter(warcFile, currentFileName, settings.digestAlgorithm, settings.Compression, record.Header.Get("Content-Length"), false, dictionary)
+				warcWriter, err = NewWriter(warcFile, currentFileName, settings.digestAlgorithm, settings.Compression, record.Header.Get("Content-Length"), false, dictionary, settings.StatsRegistry, settings.LogBackend)
 				if err != nil {
 					panic(err)
 				}
@@ -251,6 +245,7 @@ func recordWriter(settings *RotatorSettings, records chan *RecordBatch, done cha
 				panic(err)
 			}
 
+			settings.LogBackend.Info("WARC writer shutting down cleanly", "finalFile", currentFileName)
 			done <- true
 
 			return

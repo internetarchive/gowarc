@@ -4,7 +4,6 @@ import (
 	"net/http"
 	"os"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -13,9 +12,52 @@ type Error struct {
 	Func string
 }
 
+// ProxyNetwork defines the network layer (IPv4/IPv6) a proxy can support
+type ProxyNetwork int
+
+const (
+	// ProxyNetworkUnset is the zero value and must not be used - forces explicit selection
+	ProxyNetworkUnset ProxyNetwork = iota
+	// ProxyNetworkAny means the proxy can be used for both IPv4 and IPv6 connections
+	ProxyNetworkAny
+	// ProxyNetworkIPv4 means the proxy should only be used for IPv4 connections
+	ProxyNetworkIPv4
+	// ProxyNetworkIPv6 means the proxy should only be used for IPv6 connections
+	ProxyNetworkIPv6
+)
+
+// ProxyType defines the infrastructure type of a proxy
+type ProxyType int
+
+const (
+	// ProxyTypeAny means the proxy can be used for any type of request
+	ProxyTypeAny ProxyType = iota
+	// ProxyTypeMobile means the proxy uses mobile network infrastructure
+	ProxyTypeMobile
+	// ProxyTypeResidential means the proxy uses residential IP addresses
+	ProxyTypeResidential
+	// ProxyTypeDatacenter means the proxy uses datacenter infrastructure
+	ProxyTypeDatacenter
+)
+
+// ProxyConfig defines the configuration for a single proxy
+type ProxyConfig struct {
+	// URL is the proxy URL (e.g., "socks5://proxy.example.com:1080")
+	URL string
+	// Network specifies if this proxy supports IPv4, IPv6, or both
+	Network ProxyNetwork
+	// Type specifies the infrastructure type (Mobile, Residential, Datacenter, or Any)
+	Type ProxyType
+	// AllowedDomains is a list of glob patterns for domains this proxy should handle
+	// Examples: "*.example.com", "api.*.org"
+	// If empty, the proxy can be used for any domain
+	AllowedDomains []string
+}
+
 type HTTPClientSettings struct {
 	RotatorSettings       *RotatorSettings
-	Proxy                 string
+	Proxies               []ProxyConfig
+	AllowDirectFallback   bool
 	TempDir               string
 	DiscardHook           DiscardHook
 	DNSServers            []string
@@ -39,13 +81,14 @@ type HTTPClientSettings struct {
 	DisableIPv6           bool
 	IPv6AnyIP             bool
 	DigestAlgorithm       DigestAlgorithm
+	StatsRegistry         StatsRegistry
+	LogBackend            LogBackend
 }
 
 type CustomHTTPClient struct {
 	interfacesWatcherStop    chan bool
 	WaitGroup                *WaitGroupWithCount
 	dedupeHashTable          *sync.Map
-	ErrChan                  chan *Error
 	WARCWriter               chan *RecordBatch
 	interfacesWatcherStarted chan bool
 	http.Client
@@ -64,15 +107,9 @@ type CustomHTTPClient struct {
 	// If set to <= 0, the default value is DefaultMaxRAMUsageFraction.
 	MaxRAMUsageFraction float64
 	randomLocalIP       bool
-	DataTotal           *atomic.Int64
 
-	CDXDedupeTotalBytes          *atomic.Int64
-	DoppelgangerDedupeTotalBytes *atomic.Int64
-	LocalDedupeTotalBytes        *atomic.Int64
-
-	CDXDedupeTotal          *atomic.Int64
-	DoppelgangerDedupeTotal *atomic.Int64
-	LocalDedupeTotal        *atomic.Int64
+	statsRegistry StatsRegistry
+	logBackend    LogBackend
 }
 
 func (c *CustomHTTPClient) Close() error {
@@ -91,7 +128,6 @@ func (c *CustomHTTPClient) Close() error {
 	}
 
 	wg.Wait()
-	close(c.ErrChan)
 
 	if c.randomLocalIP {
 		c.interfacesWatcherStop <- true
@@ -106,16 +142,24 @@ func (c *CustomHTTPClient) Close() error {
 func NewWARCWritingHTTPClient(HTTPClientSettings HTTPClientSettings) (httpClient *CustomHTTPClient, err error) {
 	httpClient = new(CustomHTTPClient)
 
-	// Initialize counters
-	httpClient.DataTotal = &DataTotal
+	// Initialize stats registry
+	if HTTPClientSettings.StatsRegistry != nil {
+		httpClient.statsRegistry = HTTPClientSettings.StatsRegistry
+		HTTPClientSettings.RotatorSettings.StatsRegistry = HTTPClientSettings.StatsRegistry
+	} else {
+		localStatsRegistry := newLocalRegistry()
+		httpClient.statsRegistry = localStatsRegistry
+		HTTPClientSettings.RotatorSettings.StatsRegistry = localStatsRegistry
+	}
 
-	httpClient.CDXDedupeTotalBytes = &CDXDedupeTotalBytes
-	httpClient.DoppelgangerDedupeTotalBytes = &DoppelgangerDedupeTotalBytes
-	httpClient.LocalDedupeTotalBytes = &LocalDedupeTotalBytes
-
-	httpClient.CDXDedupeTotal = &CDXDedupeTotal
-	httpClient.DoppelgangerDedupeTotal = &DoppelgangerDedupeTotal
-	httpClient.LocalDedupeTotal = &LocalDedupeTotal
+	// Initialize log backend
+	if HTTPClientSettings.LogBackend != nil {
+		httpClient.logBackend = HTTPClientSettings.LogBackend
+		HTTPClientSettings.RotatorSettings.LogBackend = HTTPClientSettings.LogBackend
+	} else {
+		httpClient.logBackend = &noopLogger{}
+		HTTPClientSettings.RotatorSettings.LogBackend = &noopLogger{}
+	}
 
 	// Configure random local IP
 	httpClient.randomLocalIP = HTTPClientSettings.RandomLocalIP
@@ -141,9 +185,6 @@ func NewWARCWritingHTTPClient(HTTPClientSettings HTTPClientSettings) (httpClient
 
 	// Set a hook to determine if we should discard a response
 	httpClient.DiscardHook = HTTPClientSettings.DiscardHook
-
-	// Create an error channel for sending WARC errors through
-	httpClient.ErrChan = make(chan *Error)
 
 	// Toggle verification of certificates
 	// InsecureSkipVerify expects the opposite of the verifyCerts flag, as such we flip it.
@@ -216,7 +257,7 @@ func NewWARCWritingHTTPClient(HTTPClientSettings HTTPClientSettings) (httpClient
 	httpClient.ConnReadDeadline = HTTPClientSettings.ConnReadDeadline
 
 	// Configure custom dialer / transport
-	customDialer, err := newCustomDialer(httpClient, HTTPClientSettings.Proxy, HTTPClientSettings.DialTimeout, HTTPClientSettings.DNSRecordsTTL, HTTPClientSettings.DNSResolutionTimeout, HTTPClientSettings.DNSCacheSize, HTTPClientSettings.DNSServers, HTTPClientSettings.DNSConcurrency, HTTPClientSettings.DisableIPv4, HTTPClientSettings.DisableIPv6)
+	customDialer, err := newCustomDialer(httpClient, HTTPClientSettings.Proxies, HTTPClientSettings.AllowDirectFallback, HTTPClientSettings.DialTimeout, HTTPClientSettings.DNSRecordsTTL, HTTPClientSettings.DNSResolutionTimeout, HTTPClientSettings.DNSCacheSize, HTTPClientSettings.DNSServers, HTTPClientSettings.DNSConcurrency, HTTPClientSettings.DisableIPv4, HTTPClientSettings.DisableIPv6)
 	if err != nil {
 		return nil, err
 	}
