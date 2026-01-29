@@ -130,6 +130,18 @@ func newTestImageServer(t testing.TB, st int) *httptest.Server {
 	}))
 }
 
+func newTestImageTLSServer(t testing.TB, st int) *httptest.Server {
+	return httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fileBytes, err := os.ReadFile(path.Join("testdata", "image.svg"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Type", "image/svg+xml")
+		w.WriteHeader(st)
+		w.Write(fileBytes)
+	}))
+}
+
 func (e *errorReadCloser) Read(p []byte) (int, error) {
 	if len(e.data) > 0 && e.readBefore > 0 {
 		// Read up to min(len(p), readBefore, len(data))
@@ -1387,16 +1399,7 @@ func TestHTTPClientWithSelfSignedCertificate(t *testing.T) {
 	)
 
 	// init test (self-signed) HTTPS endpoint
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fileBytes, err := os.ReadFile(path.Join("testdata", "image.svg"))
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		w.Header().Set("Content-Type", "image/svg+xml")
-		w.WriteHeader(http.StatusOK)
-		w.Write(fileBytes)
-	}))
+	server := newTestImageTLSServer(t, http.StatusOK)
 	defer server.Close()
 
 	// init the HTTP client responsible for recording HTTP(s) requests / responses
@@ -1440,16 +1443,7 @@ func TestWARCWritingWithDisallowedCertificate(t *testing.T) {
 	)
 
 	// init test (self-signed) HTTPS endpoint
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fileBytes, err := os.ReadFile(path.Join("testdata", "image.svg"))
-		if err != nil {
-			t.Fatal(err)
-		}
-
-		w.WriteHeader(http.StatusTooManyRequests)
-		w.Header().Set("Content-Type", "image/svg+xml")
-		w.Write(fileBytes)
-	}))
+	server := newTestImageTLSServer(t, http.StatusOK)
 	defer server.Close()
 
 	// init the HTTP client responsible for recording HTTP(s) requests / responses
