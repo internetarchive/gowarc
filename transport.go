@@ -39,8 +39,10 @@ func newCustomTransport(dialer *customDialer, decompressBody bool, TLSHandshakeT
 
 	t.t = http.Transport{
 		// configure HTTP transport
-		Dial:    dialer.CustomDial,
-		DialTLS: dialer.CustomDialTLS,
+		Dial:           dialer.CustomDial,
+		DialContext:    dialer.CustomDialContext,
+		DialTLS:        dialer.CustomDialTLS,
+		DialTLSContext: dialer.CustomDialTLSContext,
 
 		// disable keep alive
 		MaxConnsPerHost:       0,

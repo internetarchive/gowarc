@@ -3,90 +3,16 @@ package warc
 import (
 	"bufio"
 	"bytes"
-	"crypto/sha1"
-	"crypto/sha256"
-	"encoding/base32"
 	"encoding/binary"
-	"encoding/hex"
 	"errors"
-	"fmt"
 	"io"
 	"os"
-	"strconv"
 	"strings"
-	"sync/atomic"
 	"time"
 
-	gzip "github.com/klauspost/compress/gzip"
-
+	"github.com/internetarchive/gowarc/pkg/spooledtempfile"
 	"github.com/klauspost/compress/zstd"
 )
-
-func GetSHA1(r io.Reader) string {
-	sha := sha1.New()
-
-	block := make([]byte, 256)
-	for {
-		n, err := r.Read(block)
-		if n > 0 {
-			sha.Write(block[:n])
-		}
-
-		if err == io.EOF {
-			break
-		}
-
-		if err != nil {
-			return "ERROR: " + err.Error()
-		}
-	}
-
-	return base32.StdEncoding.EncodeToString(sha.Sum(nil))
-}
-
-func GetSHA256(r io.Reader) string {
-	sha := sha256.New()
-
-	block := make([]byte, 256)
-	for {
-		n, err := r.Read(block)
-		if n > 0 {
-			sha.Write(block[:n])
-		}
-
-		if err == io.EOF {
-			break
-		}
-
-		if err != nil {
-			return "ERROR: " + err.Error()
-		}
-	}
-
-	return base32.StdEncoding.EncodeToString(sha.Sum(nil))
-}
-
-func GetSHA256Base16(r io.Reader) string {
-	sha := sha256.New()
-
-	block := make([]byte, 256)
-	for {
-		n, err := r.Read(block)
-		if n > 0 {
-			sha.Write(block[:n])
-		}
-
-		if err == io.EOF {
-			break
-		}
-
-		if err != nil {
-			return "ERROR: " + err.Error()
-		}
-	}
-
-	return hex.EncodeToString(sha.Sum(nil))
-}
 
 // splitKeyValue parses WARC record header fields.
 func splitKeyValue(line string) (string, string) {
@@ -97,35 +23,37 @@ func splitKeyValue(line string) (string, string) {
 	return parts[0], strings.TrimSpace(parts[1])
 }
 
-func isLineStartingWithHTTPMethod(line string) bool {
-	if strings.HasPrefix(line, "GET ") ||
-		strings.HasPrefix(line, "HEAD ") ||
-		strings.HasPrefix(line, "POST ") ||
-		strings.HasPrefix(line, "PUT ") ||
-		strings.HasPrefix(line, "DELETE ") ||
-		strings.HasPrefix(line, "CONNECT ") ||
-		strings.HasPrefix(line, "OPTIONS ") ||
-		strings.HasPrefix(line, "TRACE ") ||
-		strings.HasPrefix(line, "PATCH ") {
-		return true
-	}
+func isHTTPRequest(line string) bool {
+	httpMethods := []string{"GET ", "HEAD ", "POST ", "PUT ", "DELETE ", "CONNECT ", "OPTIONS ", "TRACE ", "PATCH "}
+	protocols := []string{"HTTP/1.0", "HTTP/1.1"}
 
+	for _, method := range httpMethods {
+		if strings.HasPrefix(line, method) {
+			for _, protocol := range protocols {
+				if strings.HasSuffix(line, protocol) {
+					return true
+				}
+			}
+		}
+	}
 	return false
 }
 
 // NewWriter creates a new WARC writer.
-func NewWriter(writer io.Writer, fileName string, compression string, contentLengthHeader string, newFileCreation bool, dictionary []byte) (*Writer, error) {
+func NewWriter(writer io.Writer, fileName string, digestAlgorithm DigestAlgorithm, compression string, contentLengthHeader string, newFileCreation bool, dictionary []byte) (*Writer, error) {
 	if compression != "" {
-		if compression == "GZIP" {
-			gzipWriter := gzip.NewWriter(writer)
+		switch strings.ToLower(compression) {
+		case "gzip":
+			gzipWriter := newGzipWriter(writer)
 
 			return &Writer{
-				FileName:    fileName,
-				Compression: compression,
-				GZIPWriter:  gzipWriter,
-				FileWriter:  bufio.NewWriter(gzipWriter),
+				FileName:        fileName,
+				Compression:     compression,
+				DigestAlgorithm: digestAlgorithm,
+				GZIPWriter:      gzipWriter,
+				FileWriter:      bufio.NewWriter(gzipWriter),
 			}, nil
-		} else if compression == "ZSTD" {
+		case "zstd":
 			if newFileCreation && len(dictionary) > 0 {
 				dictionaryZstdwriter, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedBetterCompression))
 				if err != nil {
@@ -161,10 +89,11 @@ func NewWriter(writer io.Writer, fileName string, compression string, contentLen
 					return nil, err
 				}
 				return &Writer{
-					FileName:    fileName,
-					Compression: compression,
-					ZSTDWriter:  zstdWriter,
-					FileWriter:  bufio.NewWriter(zstdWriter),
+					FileName:        fileName,
+					Compression:     compression,
+					DigestAlgorithm: digestAlgorithm,
+					ZSTDWriter:      zstdWriter,
+					FileWriter:      bufio.NewWriter(zstdWriter),
 				}, nil
 			} else {
 				zstdWriter, err := zstd.NewWriter(writer, zstd.WithEncoderLevel(zstd.SpeedBetterCompression))
@@ -172,20 +101,23 @@ func NewWriter(writer io.Writer, fileName string, compression string, contentLen
 					return nil, err
 				}
 				return &Writer{
-					FileName:    fileName,
-					Compression: compression,
-					ZSTDWriter:  zstdWriter,
-					FileWriter:  bufio.NewWriter(zstdWriter),
+					FileName:        fileName,
+					Compression:     compression,
+					DigestAlgorithm: digestAlgorithm,
+					ZSTDWriter:      zstdWriter,
+					FileWriter:      bufio.NewWriter(zstdWriter),
 				}, nil
 			}
+		default:
+			return nil, errors.New("invalid compression algorithm: " + compression)
 		}
-		return nil, errors.New("invalid compression algorithm: " + compression)
 	}
 
 	return &Writer{
-		FileName:    fileName,
-		Compression: "",
-		FileWriter:  bufio.NewWriter(writer),
+		FileName:        fileName,
+		Compression:     "",
+		DigestAlgorithm: digestAlgorithm,
+		FileWriter:      bufio.NewWriter(writer),
 	}, nil
 }
 
@@ -193,15 +125,15 @@ func NewWriter(writer io.Writer, fileName string, compression string, contentLen
 func NewRecord(tempDir string, fullOnDisk bool) *Record {
 	return &Record{
 		Header:  NewHeader(),
-		Content: NewSpooledTempFile("warc", tempDir, fullOnDisk),
+		Content: spooledtempfile.NewSpooledTempFile("warc", tempDir, -1, fullOnDisk, -1),
 	}
 }
 
-// NewRecordBatch creates a record batch,
-// it also initialize the capture time
-func NewRecordBatch() *RecordBatch {
+// NewRecordBatch creates a record batch, it also initialize the capture time.
+func NewRecordBatch(feedbackChan chan struct{}) *RecordBatch {
 	return &RecordBatch{
-		CaptureTime: time.Now().UTC().Format(time.RFC3339Nano),
+		CaptureTime:  time.Now().UTC().Format(time.RFC3339Nano),
+		FeedbackChan: feedbackChan,
 	}
 }
 
@@ -211,8 +143,9 @@ func NewRotatorSettings() *RotatorSettings {
 	return &RotatorSettings{
 		WarcinfoContent:       NewHeader(),
 		Prefix:                "WARC",
-		WarcSize:              1000,
+		WARCSize:              1000,
 		Compression:           "GZIP",
+		digestAlgorithm:       SHA1,
 		CompressionDictionary: "",
 		OutputDirectory:       "./",
 	}
@@ -257,12 +190,13 @@ func checkRotatorSettings(settings *RotatorSettings) (err error) {
 	}
 
 	// If WARC size isn't specified, set it to 1GB (10^9 bytes) by default
-	if settings.WarcSize == 0 {
-		settings.WarcSize = 1000
+	if settings.WARCSize == 0 {
+		settings.WARCSize = 1000
 	}
 
 	// Check if the specified compression algorithm is valid
-	if settings.Compression != "" && settings.Compression != "GZIP" && settings.Compression != "ZSTD" {
+	normalizedCompression := strings.ToLower(settings.Compression)
+	if settings.Compression != "" && normalizedCompression != "gzip" && normalizedCompression != "zstd" {
 		return errors.New("invalid compression algorithm: " + settings.Compression)
 	}
 
@@ -274,70 +208,7 @@ func checkRotatorSettings(settings *RotatorSettings) (err error) {
 	return nil
 }
 
-// isFielSizeExceeded compare the size of a file (filePath) with
-// a max size (maxSize), if the size of filePath exceed maxSize,
-// it returns true, else, it returns false
-func isFileSizeExceeded(filePath string, maxSize float64) bool {
-	// Open the file
-	file, err := os.Open(filePath)
-	if err != nil {
-		panic(err)
-	}
-	defer file.Close()
-
-	// Get actual file size
-	stat, err := file.Stat()
-	if err != nil {
-		panic(err)
-	}
-	fileSize := (float64)((stat.Size() / 1024) / 1024)
-
-	// If fileSize exceed maxSize, return true
-	return fileSize >= maxSize
-}
-
-// formatSerial add the correct padding to the serial
-// E.g. with serial = 23 and format = 5:
-// formatSerial return 00023
-func formatSerial(atomicSerial *int64, format string) string {
-	return fmt.Sprintf("%0"+format+"d", atomic.LoadInt64(atomicSerial))
-}
-
-// GenerateWarcFileName generate a WARC file name following recommendations
-// of the specs:
-// Prefix-Timestamp-Serial-Crawlhost.warc.gz
-func GenerateWarcFileName(prefix string, compression string, atomicSerial *int64) (fileName string) {
-	// Get host name as reported by the kernel
-	hostName, err := os.Hostname()
-	if err != nil {
-		panic(err)
-	}
-
-	// Don't let atomicSerial overflow past 99999, the current maximum with 5 serial digits.
-	if atomic.LoadInt64(atomicSerial) >= 99999 {
-		atomic.StoreInt64(atomicSerial, 0)
-	}
-
-	// Atomically increase the global serial number
-	atomic.AddInt64(atomicSerial, 1)
-
-	formattedSerial := formatSerial(atomicSerial, "5")
-
-	now := time.Now().UTC()
-	date := now.Format("20060102150405") + strconv.Itoa(now.Nanosecond())[:3]
-
-	if compression != "" {
-		if compression == "GZIP" {
-			return prefix + "-" + date + "-" + formattedSerial + "-" + hostName + ".warc.gz.open"
-		}
-		if compression == "ZSTD" {
-			return prefix + "-" + date + "-" + formattedSerial + "-" + hostName + ".warc.zst.open"
-		}
-	}
-	return prefix + "-" + date + "-" + formattedSerial + "-" + hostName + ".warc.open"
-}
-
-func getContentLength(rwsc ReadWriteSeekCloser) int {
+func getContentLength(rwsc spooledtempfile.ReadWriteSeekCloser) int {
 	// If the FileName leads to no existing file, it means that the SpooledTempFile
 	// never had the chance to buffer to disk instead of memory, in which case we can
 	// just read the buffer (which should be <= 2MB) and return the length

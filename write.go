@@ -8,36 +8,39 @@ import (
 	"strings"
 	"time"
 
-	"github.com/klauspost/compress/gzip"
-
+	"github.com/internetarchive/gowarc/pkg/spooledtempfile"
 	"github.com/google/uuid"
 	"github.com/klauspost/compress/zstd"
 )
 
 // Writer writes WARC records to WARC files.
 type Writer struct {
-	GZIPWriter   *gzip.Writer
-	ZSTDWriter   *zstd.Encoder
-	FileWriter   *bufio.Writer
-	FileName     string
-	Compression  string
-	ParallelGZIP bool
+	GZIPWriter      GzipWriterInterface
+	ZSTDWriter      *zstd.Encoder
+	FileWriter      *bufio.Writer
+	FileName        string
+	Compression     string
+	DigestAlgorithm DigestAlgorithm
+	ParallelGZIP    bool
 }
 
 // RecordBatch is a structure that contains a bunch of
 // records to be written at the same time, and a common
-// capture timestamp
+// capture timestamp. FeedbackChan is used to signal
+// when the records have been written.
 type RecordBatch struct {
-	Done        chan bool
-	CaptureTime string
-	Records     []*Record
+	FeedbackChan chan struct{}
+	CaptureTime  string
+	Records      []*Record
 }
 
 // Record represents a WARC record.
 type Record struct {
 	Header  Header
-	Content ReadWriteSeekCloser
+	Content spooledtempfile.ReadWriteSeekCloser
 	Version string // WARC/1.0, WARC/1.1 ...
+	Offset  int64  // Offset of the record start (-1 if WARC file type is not supported yet)
+	Size    int64  // COMPRESSED size of the record (gzip member): header + deflate data + trailer. (-1 if WARC file type is not supported yet)
 }
 
 // WriteRecord writes a record to the underlying WARC file.
@@ -80,7 +83,13 @@ func (w *Writer) WriteRecord(r *Record) (recordID string, err error) {
 
 	if r.Header.Get("WARC-Block-Digest") == "" {
 		r.Content.Seek(0, 0)
-		r.Header.Set("WARC-Block-Digest", "sha1:"+GetSHA1(r.Content))
+
+		digest, err := GetDigest(r.Content, w.DigestAlgorithm)
+		if err != nil {
+			return recordID, err
+		}
+
+		r.Header.Set("WARC-Block-Digest", digest)
 	}
 
 	for key, value := range r.Header {
@@ -99,7 +108,7 @@ func (w *Writer) WriteRecord(r *Record) (recordID string, err error) {
 	}
 
 	if written > 0 {
-		DataTotal.Incr(written)
+		DataTotal.Add(written)
 	}
 
 	if _, err := io.WriteString(w.FileWriter, "\r\n\r\n"); err != nil {
@@ -125,11 +134,16 @@ func (w *Writer) WriteInfoRecord(payload map[string]string) (recordID string, er
 
 	// Write the payload
 	for k, v := range payload {
-		infoRecord.Content.Write([]byte(fmt.Sprintf("%s: %s\r\n", k, v)))
+		fmt.Fprintf(infoRecord.Content, "%s: %s\r\n", k, v)
 	}
 
 	// Generate WARC-Block-Digest
-	infoRecord.Header.Set("WARC-Block-Digest", "sha1:"+GetSHA1(infoRecord.Content))
+	digest, err := GetDigest(infoRecord.Content, w.DigestAlgorithm)
+	if err != nil {
+		return recordID, err
+	}
+
+	infoRecord.Header.Set("WARC-Block-Digest", digest)
 
 	// Finally, write the record and flush the data
 	recordID, err = w.WriteRecord(infoRecord)

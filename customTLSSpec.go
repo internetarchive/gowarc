@@ -3,6 +3,7 @@ package warc
 import tls "github.com/refraction-networking/utls"
 
 // Taken from https://github.com/refraction-networking/utls/blob/master/u_parrots.go#L215 as the default Chrome config and modified to fit our needs.
+// HelloChrome_120
 func getCustomTLSSpec() *tls.ClientHelloSpec {
 	return &tls.ClientHelloSpec{
 		CipherSuites: []uint16{
@@ -26,13 +27,13 @@ func getCustomTLSSpec() *tls.ClientHelloSpec {
 		CompressionMethods: []byte{
 			0x00, // compressionNone
 		},
-		Extensions: []tls.TLSExtension{
+		Extensions: tls.ShuffleChromeTLSExtensions([]tls.TLSExtension{
 			&tls.UtlsGREASEExtension{},
 			&tls.SNIExtension{},
 			&tls.ExtendedMasterSecretExtension{},
 			&tls.RenegotiationInfoExtension{Renegotiation: tls.RenegotiateOnceAsClient},
 			&tls.SupportedCurvesExtension{Curves: []tls.CurveID{
-				tls.CurveID(tls.GREASE_PLACEHOLDER),
+				tls.GREASE_PLACEHOLDER,
 				tls.X25519,
 				tls.CurveP256,
 				tls.CurveP384,
@@ -41,7 +42,7 @@ func getCustomTLSSpec() *tls.ClientHelloSpec {
 				0x00, // pointFormatUncompressed
 			}},
 			&tls.SessionTicketExtension{},
-			// changed IMPORTANT!!! default ALPN is "h2", "http/1.1". This could get servers to automatically send us HTTP2, which we can't parse or handle. We could be profiled based on this.
+			// important change: default ALPN is "h2", "http/1.1". This could get servers to automatically send us HTTP2, which we can't parse or handle. We will likely be profiled based on this.
 			&tls.ALPNExtension{AlpnProtocols: []string{"http/1.1"}},
 			&tls.StatusRequestExtension{},
 			&tls.SignatureAlgorithmsExtension{SupportedSignatureAlgorithms: []tls.SignatureScheme{
@@ -66,14 +67,14 @@ func getCustomTLSSpec() *tls.ClientHelloSpec {
 				tls.GREASE_PLACEHOLDER,
 				tls.VersionTLS13,
 				tls.VersionTLS12,
-				tls.VersionTLS11,
-				tls.VersionTLS10,
 			}},
 			&tls.UtlsCompressCertExtension{Algorithms: []tls.CertCompressionAlgo{
 				tls.CertCompressionBrotli,
 			}},
+			// This would allow servers to send us HTTP 2, which we unfortunately cannot support yet, but this will lead to our fingerprint getting identified easier.
+			// &tls.ApplicationSettingsExtension{SupportedProtocols: []string{"h2"}},
+			tls.BoringGREASEECH(),
 			&tls.UtlsGREASEExtension{},
-			&tls.UtlsPaddingExtension{GetPaddingLen: tls.BoringPaddingStyle},
-		},
+		}),
 	}
 }

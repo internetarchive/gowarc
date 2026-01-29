@@ -2,14 +2,10 @@ package warc
 
 import (
 	"testing"
-
-	"go.uber.org/goleak"
 )
 
 // Tests for the Header methods and NewHeader
 func TestHeaderMethods(t *testing.T) {
-	defer goleak.VerifyNone(t)
-
 	rotatorSettings := NewRotatorSettings()
 
 	rotatorSettings.WarcinfoContent.Set("test-header", "test-value")

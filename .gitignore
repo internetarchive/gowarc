@@ -1,6 +1,10 @@
+.DS_Store
 warcs/**
 temp/**
 output/**
-warc
+/warc
 *.warc.gz
 *.warc.zst
+!testdata/warcs/*.warc.gz
+!testdata/warcs/*.warc.gz.open
+cmd/warc/warc

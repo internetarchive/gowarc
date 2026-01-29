@@ -1,9 +1,10 @@
-package main
+package extract
 
 import (
 	"bufio"
 	"bytes"
 	"compress/gzip"
+	"fmt"
 	"io"
 	"log/slog"
 	"mime"
@@ -12,21 +13,35 @@ import (
 	"os"
 	"path"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
-	"github.com/CorentinB/warc"
+	warc "github.com/internetarchive/gowarc"
+	"github.com/internetarchive/gowarc/cmd/warc/utils"
 	"github.com/remeh/sizedwaitgroup"
 	"github.com/spf13/cobra"
 )
 
+// Command represents the extract command
+var Command = &cobra.Command{
+	Use:   "extract",
+	Short: "Extracts the URLs from one or many WARC file(s)",
+	Long:  `Extracts the URLs from one or many WARC file(s)`,
+	Args:  cobra.MinimumNArgs(1),
+	Run:   extract,
+}
+
+func init() {
+	Command.Flags().IntP("threads", "t", 1, "Number of threads to use for extraction")
+	Command.Flags().StringP("output", "o", "output", "Output directory for extracted files")
+	Command.Flags().StringSliceP("content-type", "c", []string{}, "Content type that should be extracted")
+	Command.Flags().Bool("allow-overwrite", false, "Allow overwriting of existing files")
+	Command.Flags().Bool("host-sort", false, "Sort the extracted URLs by host")
+	Command.Flags().Bool("hash-suffix", false, "When duplicate file names exist, the hash will be added if a duplicate file name exists. ")
+}
+
 func extract(cmd *cobra.Command, files []string) {
-	threads, err := strconv.Atoi(cmd.Flags().Lookup("threads").Value.String())
-	if err != nil {
-		slog.Error("invalid threads value", "err", err.Error())
-		return
-	}
+	threads := utils.GetThreadsFlag(cmd)
 
 	swg := sizedwaitgroup.New(threads)
 
@@ -35,17 +50,11 @@ func extract(cmd *cobra.Command, files []string) {
 		resultsChan := make(chan string)
 		results := make(map[string]int)
 
-		f, err := os.Open(filepath)
+		reader, f, err := utils.OpenWARCFile(filepath)
 		if err != nil {
-			slog.Error("unable to open file", "err", err.Error(), "file", filepath)
 			return
 		}
-
-		reader, err := warc.NewReader(f)
-		if err != nil {
-			slog.Error("warc.NewReader failed", "err", err.Error(), "file", filepath)
-			return
-		}
+		defer f.Close()
 
 		go func(c chan string) {
 			for result := range c {
@@ -54,11 +63,11 @@ func extract(cmd *cobra.Command, files []string) {
 		}(resultsChan)
 
 		for {
-			record, eol, err := reader.ReadRecord()
-			if eol {
-				break
-			}
+			record, err := reader.ReadRecord()
 			if err != nil {
+				if err == io.EOF {
+					break
+				}
 				slog.Error("failed to read record", "err", err.Error(), "file", filepath)
 				return
 			}
@@ -78,14 +87,7 @@ func processRecord(cmd *cobra.Command, record *warc.Record, resultsChan *chan st
 	defer record.Content.Close()
 	defer swg.Done()
 
-	// Only process Content-Type: application/http; msgtype=response (no reason to process requests or other records)
-	if !strings.Contains(record.Header.Get("Content-Type"), "msgtype=response") {
-		slog.Debug("skipping record with Content-Type", "contentType", record.Header.Get("Content-Type"), "recordID", record.Header.Get("WARC-Record-ID"))
-		return
-	}
-
-	if record.Header.Get("WARC-Type") == "revisit" {
-		slog.Debug("skipping revisit record", "recordID", record.Header.Get("WARC-Record-ID"))
+	if utils.ShouldSkipRecord(record) {
 		return
 	}
 
@@ -133,10 +135,9 @@ func writeFile(vmd *cobra.Command, resp *http.Response, record *warc.Record) err
 	}
 
 	// Truncate the filename if it's too long (keep the extension)
-	if len(filename) > 255 {
+	if len(filename) > utils.MaxFilenameLength {
 		extension := path.Ext(filename)
-
-		filename = filename[:255-len(extension)] + extension
+		filename = filename[:utils.MaxFilenameLength-len(extension)] + extension
 	}
 
 	// Remove any invalid characters from the filename
@@ -147,7 +148,7 @@ func writeFile(vmd *cobra.Command, resp *http.Response, record *warc.Record) err
 
 	// Create the output directory if it doesn't exist.
 	if _, err := os.Stat(outputDir); os.IsNotExist(err) {
-		err := os.MkdirAll(outputDir, 0755)
+		err := os.MkdirAll(outputDir, utils.DefaultDirPermissions)
 		if err != nil {
 			return err
 		}
@@ -161,7 +162,7 @@ func writeFile(vmd *cobra.Command, resp *http.Response, record *warc.Record) err
 			return err
 		}
 
-		err = os.MkdirAll(path.Join(outputDir, URL.Host), 0755)
+		err = os.MkdirAll(path.Join(outputDir, URL.Host), utils.DefaultDirPermissions)
 		if err != nil {
 			return err
 		}
@@ -197,18 +198,24 @@ func writeFile(vmd *cobra.Command, resp *http.Response, record *warc.Record) err
 				reader = bytes.NewReader(body)
 			}
 
-			payloadDigest := warc.GetSHA1(reader)
+			payloadDigest, err := warc.GetDigest(reader, warc.SHA1)
+			if err != nil {
+				return err
+			}
 
 			// Reset response reader
 			resp.Body = io.NopCloser(bytes.NewBuffer(body))
 
-			originalPayloadDigest := warc.GetSHA1(originalFile)
+			originalPayloadDigest, err := warc.GetDigest(originalFile, warc.SHA1)
+			if err != nil {
+				return err
+			}
 
 			if originalPayloadDigest != payloadDigest {
-				if len(filename) > 247 {
+				if len(filename) > utils.MaxFilenameWithHashLength {
 					extension := path.Ext(filename)
 
-					filename = filename[:247-len(extension)] + "[" + payloadDigest[26:] + "]" + extension
+					filename = filename[:utils.MaxFilenameWithHashLength-len(extension)] + "[" + payloadDigest[26:] + "]" + extension
 				} else {
 					extension := path.Ext(filename)
 
@@ -236,7 +243,7 @@ func writeFile(vmd *cobra.Command, resp *http.Response, record *warc.Record) err
 	}
 
 	// Create the file
-	file, err := os.OpenFile(outputPath, os.O_CREATE|os.O_WRONLY, 0644)
+	file, err := os.OpenFile(outputPath, os.O_CREATE|os.O_WRONLY, utils.DefaultFilePermissions)
 	if err != nil {
 		return err
 	}
@@ -265,4 +272,18 @@ func writeFile(vmd *cobra.Command, resp *http.Response, record *warc.Record) err
 	}
 
 	return nil
+}
+
+func printExtractReport(filePath string, results map[string]int, elapsed time.Duration) {
+	total := 0
+
+	for _, v := range results {
+		total += v
+	}
+
+	slog.Info(fmt.Sprintf("Processed file %s in %s", filePath, elapsed.String()))
+	slog.Info(fmt.Sprintf("Number of files extracted: %d", total))
+	for k, v := range results {
+		slog.Info(fmt.Sprintf("- %s: %d\n", k, v))
+	}
 }

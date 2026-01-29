@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -16,37 +17,62 @@ type HTTPClientSettings struct {
 	RotatorSettings       *RotatorSettings
 	Proxy                 string
 	TempDir               string
-	SkipHTTPStatusCodes   []int
+	DiscardHook           DiscardHook
+	DNSServers            []string
 	DedupeOptions         DedupeOptions
 	DialTimeout           time.Duration
 	ResponseHeaderTimeout time.Duration
+	DNSResolutionTimeout  time.Duration
+	DNSRecordsTTL         time.Duration
+	DNSCacheSize          int
+	DNSConcurrency        int
 	TLSHandshakeTimeout   time.Duration
+	ConnReadDeadline      time.Duration
 	MaxReadBeforeTruncate int
-	TCPTimeout            time.Duration
 	DecompressBody        bool
 	FollowRedirects       bool
 	FullOnDisk            bool
+	MaxRAMUsageFraction   float64
 	VerifyCerts           bool
 	RandomLocalIP         bool
 	DisableIPv4           bool
 	DisableIPv6           bool
+	IPv6AnyIP             bool
+	DigestAlgorithm       DigestAlgorithm
 }
 
 type CustomHTTPClient struct {
-	WARCWriter      chan *RecordBatch
-	WaitGroup       *WaitGroupWithCount
-	dedupeHashTable *sync.Map
-	ErrChan         chan *Error
+	interfacesWatcherStop    chan bool
+	WaitGroup                *WaitGroupWithCount
+	dedupeHashTable          *sync.Map
+	ErrChan                  chan *Error
+	WARCWriter               chan *RecordBatch
+	interfacesWatcherStarted chan bool
 	http.Client
 	TempDir                string
 	WARCWriterDoneChannels []chan bool
-	skipHTTPStatusCodes    []int
+	DiscardHook            DiscardHook
 	dedupeOptions          DedupeOptions
-	MaxReadBeforeTruncate  int
 	TLSHandshakeTimeout    time.Duration
+	ConnReadDeadline       time.Duration
+	MaxReadBeforeTruncate  int
 	verifyCerts            bool
 	FullOnDisk             bool
-	randomLocalIP          bool
+	DigestAlgorithm        DigestAlgorithm
+	closeDNSCache          func()
+	// MaxRAMUsageFraction is the fraction of system RAM above which we'll force spooling to disk. For example, 0.5 = 50%.
+	// If set to <= 0, the default value is DefaultMaxRAMUsageFraction.
+	MaxRAMUsageFraction float64
+	randomLocalIP       bool
+	DataTotal           *atomic.Int64
+
+	CDXDedupeTotalBytes          *atomic.Int64
+	DoppelgangerDedupeTotalBytes *atomic.Int64
+	LocalDedupeTotalBytes        *atomic.Int64
+
+	CDXDedupeTotal          *atomic.Int64
+	DoppelgangerDedupeTotal *atomic.Int64
+	LocalDedupeTotal        *atomic.Int64
 }
 
 func (c *CustomHTTPClient) Close() error {
@@ -67,29 +93,54 @@ func (c *CustomHTTPClient) Close() error {
 	wg.Wait()
 	close(c.ErrChan)
 
+	if c.randomLocalIP {
+		c.interfacesWatcherStop <- true
+		close(c.interfacesWatcherStop)
+	}
+
+	c.closeDNSCache()
+
 	return nil
 }
 
 func NewWARCWritingHTTPClient(HTTPClientSettings HTTPClientSettings) (httpClient *CustomHTTPClient, err error) {
 	httpClient = new(CustomHTTPClient)
 
+	// Initialize counters
+	httpClient.DataTotal = &DataTotal
+
+	httpClient.CDXDedupeTotalBytes = &CDXDedupeTotalBytes
+	httpClient.DoppelgangerDedupeTotalBytes = &DoppelgangerDedupeTotalBytes
+	httpClient.LocalDedupeTotalBytes = &LocalDedupeTotalBytes
+
+	httpClient.CDXDedupeTotal = &CDXDedupeTotal
+	httpClient.DoppelgangerDedupeTotal = &DoppelgangerDedupeTotal
+	httpClient.LocalDedupeTotal = &LocalDedupeTotal
+
 	// Configure random local IP
 	httpClient.randomLocalIP = HTTPClientSettings.RandomLocalIP
 	if httpClient.randomLocalIP {
-		go getAvailableIPs()
+		httpClient.interfacesWatcherStop = make(chan bool)
+		httpClient.interfacesWatcherStarted = make(chan bool)
+		go httpClient.getAvailableIPs(HTTPClientSettings.IPv6AnyIP)
+		<-httpClient.interfacesWatcherStarted
 	}
+
+	// Set block and payload digest algorithm (it's important to set that before we configure the WARC writer)
+	httpClient.DigestAlgorithm = HTTPClientSettings.DigestAlgorithm
+	HTTPClientSettings.RotatorSettings.digestAlgorithm = HTTPClientSettings.DigestAlgorithm
 
 	// Toggle deduplication options and create map for deduplication records.
 	httpClient.dedupeOptions = HTTPClientSettings.DedupeOptions
 	httpClient.dedupeHashTable = new(sync.Map)
 
-	// Set default deduplication threshold to 1024 bytes
+	// Set default deduplication threshold to 2048 bytes
 	if httpClient.dedupeOptions.SizeThreshold == 0 {
-		httpClient.dedupeOptions.SizeThreshold = 1024
+		httpClient.dedupeOptions.SizeThreshold = 2048
 	}
 
-	// Configure HTTP status code skipping (usually 429)
-	httpClient.skipHTTPStatusCodes = HTTPClientSettings.SkipHTTPStatusCodes
+	// Set a hook to determine if we should discard a response
+	httpClient.DiscardHook = HTTPClientSettings.DiscardHook
 
 	// Create an error channel for sending WARC errors through
 	httpClient.ErrChan = make(chan *Error)
@@ -109,6 +160,9 @@ func NewWARCWritingHTTPClient(HTTPClientSettings HTTPClientSettings) (httpClient
 
 	// Configure if we are only storing responses only on disk or in memory and on disk.
 	httpClient.FullOnDisk = HTTPClientSettings.FullOnDisk
+
+	// Configure the maximum RAM usage fraction
+	httpClient.MaxRAMUsageFraction = HTTPClientSettings.MaxRAMUsageFraction
 
 	// Configure our max read before we start truncating records
 	if HTTPClientSettings.MaxReadBeforeTruncate == 0 {
@@ -146,12 +200,30 @@ func NewWARCWritingHTTPClient(HTTPClientSettings HTTPClientSettings) (httpClient
 		HTTPClientSettings.TLSHandshakeTimeout = 10 * time.Second
 	}
 
+	if HTTPClientSettings.DNSResolutionTimeout == 0 {
+		HTTPClientSettings.DNSResolutionTimeout = 5 * time.Second
+	}
+
+	if HTTPClientSettings.DNSRecordsTTL == 0 {
+		HTTPClientSettings.DNSRecordsTTL = 5 * time.Minute
+	}
+
+	if HTTPClientSettings.DNSCacheSize == 0 {
+		HTTPClientSettings.DNSCacheSize = 10_000
+	}
+
 	httpClient.TLSHandshakeTimeout = HTTPClientSettings.TLSHandshakeTimeout
+	httpClient.ConnReadDeadline = HTTPClientSettings.ConnReadDeadline
 
 	// Configure custom dialer / transport
-	customDialer, err := newCustomDialer(httpClient, HTTPClientSettings.Proxy, HTTPClientSettings.DialTimeout, HTTPClientSettings.DisableIPv4, HTTPClientSettings.DisableIPv6)
+	customDialer, err := newCustomDialer(httpClient, HTTPClientSettings.Proxy, HTTPClientSettings.DialTimeout, HTTPClientSettings.DNSRecordsTTL, HTTPClientSettings.DNSResolutionTimeout, HTTPClientSettings.DNSCacheSize, HTTPClientSettings.DNSServers, HTTPClientSettings.DNSConcurrency, HTTPClientSettings.DisableIPv4, HTTPClientSettings.DisableIPv6)
 	if err != nil {
 		return nil, err
+	}
+
+	httpClient.closeDNSCache = func() {
+		customDialer.DNSRecords.Close()
+		time.Sleep(1 * time.Second)
 	}
 
 	customTransport, err := newCustomTransport(customDialer, HTTPClientSettings.DecompressBody, HTTPClientSettings.TLSHandshakeTimeout)
