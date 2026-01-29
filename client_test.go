@@ -1432,6 +1432,7 @@ func TestHTTPClientWithSelfSignedCertificate(t *testing.T) {
 
 	for _, path := range files {
 		testFileSingleHashCheck(t, path, "sha1:UIRWL5DFIPQ4MX3D3GFHM2HCVU3TZ6I3", []string{"26872"}, 1, server.URL+"/")
+		testFileTLSHeaders(t, path)
 		os.Remove(path)
 	}
 }
