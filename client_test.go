@@ -160,9 +160,6 @@ func TestHTTPClient(t *testing.T) {
 		err             error
 	)
 
-	// Reset counter to 0
-	DataTotal.Store(0)
-
 	// init test HTTP endpoint
 	server := newTestImageServer(t, http.StatusOK)
 	defer server.Close()
@@ -207,7 +204,7 @@ func TestHTTPClient(t *testing.T) {
 	}
 
 	// verify that the remote dedupe count is correct
-	dataTotal := httpClient.DataTotal.Load()
+	dataTotal := httpClient.statsRegistry.RegisterCounter(totalDataWritten, totalDataWrittenHelp, nil).WithLabels(nil).Get()
 	if dataTotal != expectedPayloadBytes {
 		t.Fatalf("total bytes downloaded mismatch, expected %d got %d", expectedPayloadBytes, dataTotal)
 	}
@@ -688,7 +685,13 @@ func TestHTTPClientWithProxy(t *testing.T) {
 	// init the HTTP client responsible for recording HTTP(s) requests / responses
 	httpClient, err := NewWARCWritingHTTPClient(HTTPClientSettings{
 		RotatorSettings: rotatorSettings,
-		Proxy:           fmt.Sprintf("socks5://%s", proxyAddr)})
+		Proxies: []ProxyConfig{
+			{
+				URL:     fmt.Sprintf("socks5://%s", proxyAddr),
+				Network: ProxyNetworkAny,
+				Type:    ProxyTypeAny,
+			},
+		}})
 	if err != nil {
 		t.Fatalf("Unable to init WARC writing HTTP client: %s", err)
 	}
@@ -846,10 +849,6 @@ func TestHTTPClientLocalDedupe(t *testing.T) {
 		err             error
 	)
 
-	// Reset counter to 0
-	LocalDedupeTotal.Store(0)
-	LocalDedupeTotalBytes.Store(0)
-
 	// init test HTTP endpoint
 	server := newTestImageServer(t, http.StatusOK)
 	defer server.Close()
@@ -897,18 +896,13 @@ func TestHTTPClientLocalDedupe(t *testing.T) {
 	}
 
 	// verify that the local dedupe count is correct
-	if LocalDedupeTotalBytes.Load() != 26872 {
-		t.Fatalf("local dedupe total bytes mismatch, expected: 26872 got: %d", LocalDedupeTotalBytes.Load())
-	}
-
-	// Ensure that HTTP client results work correctly as well
-	if httpClient.LocalDedupeTotalBytes.Load() != 26872 {
-		t.Fatalf("local dedupe total bytes mismatch, expected: 26872 got: %d", httpClient.LocalDedupeTotalBytes.Load())
+	if httpClient.statsRegistry.RegisterCounter(localDedupedBytesTotal, localDedupedBytesTotalHelp, nil).WithLabels(nil).Get() != 26872 {
+		t.Fatalf("local dedupe total bytes mismatch, expected: 26872 got: %d", httpClient.statsRegistry.RegisterCounter(localDedupedBytesTotal, localDedupedBytesTotalHelp, nil).WithLabels(nil).Get())
 	}
 
 	// 1 is expected due to requiring one request to enter into the table.
-	if httpClient.LocalDedupeTotal.Load() != 1 {
-		t.Fatalf("local dedupe total mismatch, expected: 1 got: %d", httpClient.LocalDedupeTotal.Load())
+	if httpClient.statsRegistry.RegisterCounter(localDedupedTotal, localDedupedTotalHelp, nil).WithLabels(nil).Get() != 1 {
+		t.Fatalf("local dedupe total mismatch, expected: 1 got: %d", httpClient.statsRegistry.RegisterCounter(localDedupedTotal, localDedupedTotalHelp, nil).WithLabels(nil).Get())
 	}
 }
 
@@ -921,10 +915,6 @@ func TestHTTPClientRemoteDedupe(t *testing.T) {
 	)
 	// init test HTTP endpoint
 	mux := http.NewServeMux()
-
-	// Reset counter to 0
-	CDXDedupeTotal.Store(0)
-	CDXDedupeTotalBytes.Store(0)
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		fileBytes, err := os.ReadFile(path.Join("testdata", "image.svg"))
@@ -990,18 +980,13 @@ func TestHTTPClientRemoteDedupe(t *testing.T) {
 		testFileRevisitVailidity(t, path, "2022-03-20T00:25:18Z", "sha1:UIRWL5DFIPQ4MX3D3GFHM2HCVU3TZ6I3", false)
 	}
 
-	// verify that the remote dedupe count is correct
-	if CDXDedupeTotalBytes.Load() != 107488 {
-		t.Fatalf("remote dedupe total bytes mismatch, expected: 107488 got: %d", CDXDedupeTotalBytes.Load())
+	// verify that the CDX dedupe count is correct
+	if httpClient.statsRegistry.RegisterCounter(cdxDedupedBytesTotal, cdxDedupedBytesTotalHelp, nil).WithLabels(nil).Get() != 107488 {
+		t.Fatalf("CDX dedupe total bytes mismatch, expected: 26872 got: %d", httpClient.statsRegistry.RegisterCounter(cdxDedupedBytesTotal, cdxDedupedBytesTotalHelp, nil).WithLabels(nil).Get())
 	}
 
-	// Ensure that HTTP client results work correctly as well
-	if httpClient.CDXDedupeTotalBytes.Load() != 107488 {
-		t.Fatalf("remote dedupe total bytes mismatch, expected: 107488 got: %d", httpClient.CDXDedupeTotalBytes.Load())
-	}
-
-	if httpClient.CDXDedupeTotal.Load() != 4 {
-		t.Fatalf("remote dedupe total mismatch, expected: 4 got: %d", httpClient.CDXDedupeTotal.Load())
+	if httpClient.statsRegistry.RegisterCounter(cdxDedupedTotal, cdxDedupedTotalHelp, nil).WithLabels(nil).Get() != 4 {
+		t.Fatalf("CDX dedupe total mismatch, expected: 1 got: %d", httpClient.statsRegistry.RegisterCounter(cdxDedupedTotal, cdxDedupedTotalHelp, nil).WithLabels(nil).Get())
 	}
 }
 
@@ -1015,10 +1000,6 @@ func TestHTTPClientDoppelgangerDedupe(t *testing.T) {
 	)
 	// init test HTTP endpoint
 	mux := http.NewServeMux()
-
-	// Reset counter to 0
-	DoppelgangerDedupeTotal.Store(0)
-	DoppelgangerDedupeTotalBytes.Store(0)
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		fileBytes, err := os.ReadFile(path.Join("testdata", "image.svg"))
@@ -1089,18 +1070,13 @@ func TestHTTPClientDoppelgangerDedupe(t *testing.T) {
 		testFileRevisitVailidity(t, path, "2022-03-20T00:25:18Z", "sha1:UIRWL5DFIPQ4MX3D3GFHM2HCVU3TZ6I3", false)
 	}
 
-	// verify that the remote dedupe count is correct
-	if DoppelgangerDedupeTotalBytes.Load() != 107488 {
-		t.Fatalf("remote dedupe total bytes mismatch, expected: 107488 got: %d", DoppelgangerDedupeTotalBytes.Load())
+	// verify that the Doppelganger count is correct
+	if httpClient.statsRegistry.RegisterCounter(doppelgangerDedupedBytesTotal, doppelgangerDedupedBytesTotalHelp, nil).WithLabels(nil).Get() != 107488 {
+		t.Fatalf("Doppelganger total bytes mismatch, expected: 26872 got: %d", httpClient.statsRegistry.RegisterCounter(doppelgangerDedupedBytesTotal, doppelgangerDedupedBytesTotalHelp, nil).WithLabels(nil).Get())
 	}
 
-	// Ensure that HTTP client results work correctly as well
-	if httpClient.DoppelgangerDedupeTotalBytes.Load() != 107488 {
-		t.Fatalf("remote dedupe total bytes mismatch, expected: 107488 got: %d", httpClient.DoppelgangerDedupeTotalBytes.Load())
-	}
-
-	if httpClient.DoppelgangerDedupeTotal.Load() != 4 {
-		t.Fatalf("remote dedupe total mismatch, expected: 4 got: %d", httpClient.DoppelgangerDedupeTotal.Load())
+	if httpClient.statsRegistry.RegisterCounter(doppelgangerDedupedTotal, doppelgangerDedupedTotalHelp, nil).WithLabels(nil).Get() != 4 {
+		t.Fatalf("Doppelganger total mismatch, expected: 1 got: %d", httpClient.statsRegistry.RegisterCounter(doppelgangerDedupedTotal, doppelgangerDedupedTotalHelp, nil).WithLabels(nil).Get())
 	}
 }
 
@@ -1109,10 +1085,6 @@ func TestHTTPClientDedupeEmptyPayload(t *testing.T) {
 		rotatorSettings = defaultRotatorSettings(t)
 		err             error
 	)
-
-	// Reset counter to 0
-	LocalDedupeTotal.Store(0)
-	LocalDedupeTotalBytes.Store(0)
 
 	// init test HTTP endpoint
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1167,17 +1139,12 @@ func TestHTTPClientDedupeEmptyPayload(t *testing.T) {
 	}
 
 	// verify that the local dedupe count is correct
-	if LocalDedupeTotalBytes.Load() != 0 {
-		t.Fatalf("local dedupe total bytes mismatch, expected: 0 got: %d", LocalDedupeTotalBytes.Load())
+	if httpClient.statsRegistry.RegisterCounter(localDedupedBytesTotal, localDedupedBytesTotalHelp, nil).WithLabels(nil).Get() != 0 {
+		t.Fatalf("local dedupe total bytes mismatch, expected: 26872 got: %d", httpClient.statsRegistry.RegisterCounter(localDedupedBytesTotal, localDedupedBytesTotalHelp, nil).WithLabels(nil).Get())
 	}
 
-	// Ensure that HTTP client results work correctly as well
-	if httpClient.LocalDedupeTotalBytes.Load() != 0 {
-		t.Fatalf("local dedupe total bytes mismatch, expected: 0 got: %d", httpClient.LocalDedupeTotalBytes.Load())
-	}
-
-	if httpClient.LocalDedupeTotal.Load() != 0 {
-		t.Fatalf("local dedupe total mismatch, expected: 0 got: %d", httpClient.LocalDedupeTotal.Load())
+	if httpClient.statsRegistry.RegisterCounter(localDedupedTotal, localDedupedTotalHelp, nil).WithLabels(nil).Get() != 0 {
+		t.Fatalf("local dedupe total mismatch, expected: 1 got: %d", httpClient.statsRegistry.RegisterCounter(localDedupedTotal, localDedupedTotalHelp, nil).WithLabels(nil).Get())
 	}
 }
 
