@@ -1387,7 +1387,16 @@ func TestHTTPClientWithSelfSignedCertificate(t *testing.T) {
 	)
 
 	// init test (self-signed) HTTPS endpoint
-	server := newTestImageServer(t, http.StatusOK)
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fileBytes, err := os.ReadFile(path.Join("testdata", "image.svg"))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		w.Header().Set("Content-Type", "image/svg+xml")
+		w.WriteHeader(http.StatusOK)
+		w.Write(fileBytes)
+	}))
 	defer server.Close()
 
 	// init the HTTP client responsible for recording HTTP(s) requests / responses
