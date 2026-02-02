@@ -127,7 +127,7 @@ func (m *mockDNSClient) ExchangeContext(ctx context.Context, msg *dns.Msg, addre
 func newTestCustomDialer() (d *customDialer) {
 	d = new(customDialer)
 
-	DNScache, err := otter.MustBuilder[string, net.IP](1000).
+	DNScache, err := otter.MustBuilder[string, dnsResult](1000).
 		WithTTL(1 * time.Hour).
 		Build()
 	if err != nil {
@@ -243,7 +243,7 @@ func TestNoDNSServersConfigured(t *testing.T) {
 
 	wantErr := errors.New("no DNS servers configured")
 	d.DNSConfig.Servers = []string{}
-	_, _, err := d.archiveDNS(context.Background(), target)
+	_, _, _, err := d.archiveDNS(context.Background(), target)
 	if err.Error() != wantErr.Error() {
 		t.Errorf("Want error %s, got %s", wantErr, err)
 	}
@@ -254,16 +254,19 @@ func TestNormalDNSResolution(t *testing.T) {
 	defer cleanup()
 
 	d.DNSConfig.Servers = []string{publicDNS}
-	IP, _, err := d.archiveDNS(context.Background(), target)
+	ipv4, ipv6, _, err := d.archiveDNS(context.Background(), target)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	cachedIP, ok := d.DNSRecords.Get(targetHost)
+	cachedResult, ok := d.DNSRecords.Get(targetHost)
 	if !ok {
 		t.Error("Cache not working")
 	}
-	if cachedIP.String() != IP.String() {
+	// Check that all resolved IPs match the cache
+	// Error if any resolved IP doesn't match its cached counterpart
+	if (ipv4 != nil && cachedResult.ipv4.String() != ipv4.String()) ||
+		(ipv6 != nil && cachedResult.ipv6.String() != ipv6.String()) {
 		t.Error("Cached IP not matching resolved IP")
 	}
 }
@@ -276,20 +279,24 @@ func TestIPv6Only(t *testing.T) {
 	d.disableIPv6 = false
 
 	d.DNSConfig.Servers = []string{publicDNS}
-	IP, _, err := d.archiveDNS(context.Background(), target)
+	ipv4, ipv6, _, err := d.archiveDNS(context.Background(), target)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("Resolved IP: %s", IP)
+	if ipv4 != nil {
+		t.Errorf("Expected no IPv4 address when disabled, got %v", ipv4)
+	}
+
+	t.Logf("Resolved IPv6: %s", ipv6)
 }
 
 func TestNXDOMAIN(t *testing.T) {
 	d, _, cleanup := setup(t)
 	defer cleanup()
 
-	IP, _, err := d.archiveDNS(context.Background(), nxdomain)
+	ipv4, ipv6, _, err := d.archiveDNS(context.Background(), nxdomain)
 	if err == nil {
-		t.Error("Want failure,", "got resolved IP", IP)
+		t.Error("Want failure,", "got resolved IPs", ipv4, ipv6)
 	}
 }
 
@@ -299,11 +306,11 @@ func TestDNSFallback(t *testing.T) {
 
 	d.DNSRecords.Delete(targetHost)
 	d.DNSConfig.Servers = []string{invalidDNS, publicDNS}
-	IP, _, err := d.archiveDNS(context.Background(), target)
+	ipv4, ipv6, _, err := d.archiveDNS(context.Background(), target)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("Resolved IP: %s", IP)
+	t.Logf("Resolved IPs: v4=%s v6=%s", ipv4, ipv6)
 }
 
 func TestDNSCaching(t *testing.T) {
@@ -312,7 +319,7 @@ func TestDNSCaching(t *testing.T) {
 
 	d.DNSConfig.Servers = []string{publicDNS}
 	ctx := context.Background()
-	_, cached, err := d.archiveDNS(ctx, target)
+	_, _, cached, err := d.archiveDNS(ctx, target)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -320,7 +327,7 @@ func TestDNSCaching(t *testing.T) {
 		t.Error("Expected uncached result")
 	}
 
-	_, cached, err = d.archiveDNS(ctx, target)
+	_, _, cached, err = d.archiveDNS(ctx, target)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -328,7 +335,7 @@ func TestDNSCaching(t *testing.T) {
 		t.Error("Expected cached result")
 	}
 
-	_, cached, err = d.archiveDNS(ctx, target1)
+	_, _, cached, err = d.archiveDNS(ctx, target1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -336,7 +343,7 @@ func TestDNSCaching(t *testing.T) {
 		t.Error("Expected uncached result")
 	}
 
-	_, cached, err = d.archiveDNS(ctx, target)
+	_, _, cached, err = d.archiveDNS(ctx, target)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -366,12 +373,12 @@ func TestDNSConcurrencySequential(t *testing.T) {
 	d.DNSConfig.Servers = []string{"1.1.1.1", "2.2.2.2", "3.3.3.3"}
 	d.DNSRecords.Delete(targetHost)
 
-	IP, _, err := d.archiveDNS(context.Background(), target)
+	ipv4, ipv6, _, err := d.archiveDNS(context.Background(), target)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if IP == nil {
+	if ipv4 == nil && ipv6 == nil {
 		t.Fatal("Expected resolved IP")
 	}
 
@@ -404,12 +411,12 @@ func TestDNSConcurrencyParallel(t *testing.T) {
 	d.DNSConfig.Servers = []string{"1.1.1.1", "2.2.2.2", "3.3.3.3"}
 	d.DNSRecords.Delete(targetHost)
 
-	IP, _, err := d.archiveDNS(context.Background(), target)
+	ipv4, ipv6, _, err := d.archiveDNS(context.Background(), target)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if IP == nil {
+	if ipv4 == nil && ipv6 == nil {
 		t.Fatal("Expected resolved IP")
 	}
 
@@ -439,12 +446,12 @@ func TestDNSConcurrencyUnlimited(t *testing.T) {
 	d.DNSConfig.Servers = []string{"1.1.1.1", "2.2.2.2", "3.3.3.3"}
 	d.DNSRecords.Delete(targetHost)
 
-	IP, _, err := d.archiveDNS(context.Background(), target)
+	ipv4, ipv6, _, err := d.archiveDNS(context.Background(), target)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if IP == nil {
+	if ipv4 == nil && ipv6 == nil {
 		t.Fatal("Expected resolved IP")
 	}
 
@@ -482,7 +489,7 @@ func TestDNSRoundRobin(t *testing.T) {
 		d.DNSRecords.Delete("example" + string(rune('a'+i)) + ".com")
 
 		callLogBefore := len(mock.getCallLog())
-		_, _, err := d.archiveDNS(context.Background(), host)
+		_, _, _, err := d.archiveDNS(context.Background(), host)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -536,12 +543,12 @@ func TestDNSMultipleServersFallback(t *testing.T) {
 	d.DNSConfig.Servers = []string{"1.1.1.1", "2.2.2.2", "3.3.3.3"}
 	d.DNSRecords.Delete(targetHost)
 
-	IP, _, err := d.archiveDNS(context.Background(), target)
+	ipv4, ipv6, _, err := d.archiveDNS(context.Background(), target)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if IP == nil {
+	if ipv4 == nil && ipv6 == nil {
 		t.Fatal("Expected resolved IP from third server")
 	}
 
@@ -588,14 +595,14 @@ func TestDNSEarlyCancellation(t *testing.T) {
 	d.DNSRecords.Delete(targetHost)
 
 	start := time.Now()
-	IP, _, err := d.archiveDNS(context.Background(), target)
+	ipv4, ipv6, _, err := d.archiveDNS(context.Background(), target)
 	elapsed := time.Since(start)
 
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if IP == nil {
+	if ipv4 == nil && ipv6 == nil {
 		t.Fatal("Expected resolved IP")
 	}
 
@@ -626,21 +633,25 @@ func TestDNSIPv4Only(t *testing.T) {
 	d.DNSConfig.Servers = []string{"1.1.1.1"}
 	d.DNSRecords.Delete(targetHost)
 
-	IP, _, err := d.archiveDNS(context.Background(), target)
+	ipv4, ipv6, _, err := d.archiveDNS(context.Background(), target)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Should return IPv4 only
-	if IP == nil {
+	if ipv4 == nil {
 		t.Fatal("Expected IPv4 address")
 	}
 
-	if IP.To4() == nil {
-		t.Errorf("Expected IPv4 address, got %v", IP)
+	if ipv4.To4() == nil {
+		t.Errorf("Expected IPv4 address, got %v", ipv4)
 	}
 
-	t.Logf("Resolved IPv4: %v", IP)
+	if ipv6 != nil {
+		t.Errorf("Expected no IPv6 address when disabled, got %v", ipv6)
+	}
+
+	t.Logf("Resolved IPv4: %v", ipv4)
 }
 
 // TestDNSMixedResults tests when IPv4 succeeds but IPv6 fails
@@ -658,15 +669,309 @@ func TestDNSMixedResults(t *testing.T) {
 	d.DNSConfig.Servers = []string{"1.1.1.1"}
 	d.DNSRecords.Delete(targetHost)
 
-	IP, _, err := d.archiveDNS(context.Background(), target)
+	ipv4, ipv6, _, err := d.archiveDNS(context.Background(), target)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Should succeed with IPv4 even though IPv6 failed
-	if IP == nil {
+	if ipv4 == nil {
 		t.Fatal("Expected IPv4 address")
 	}
 
-	t.Logf("Resolved with mixed results: %v", IP)
+	t.Logf("Resolved with mixed results: ipv4=%v ipv6=%v", ipv4, ipv6)
+}
+
+// TestDisableIPv4 tests that disableIPv4 prevents IPv4 resolution and dialing
+func TestDisableIPv4(t *testing.T) {
+	d, cleanup := setupMock()
+	defer cleanup()
+
+	mock := newMockDNSClient()
+	d.DNSClient = mock
+	d.disableIPv4 = true
+	d.disableIPv6 = false
+
+	server1 := "1.1.1.1:53"
+	mock.setResponse(server1, net.ParseIP("192.0.2.1"), net.ParseIP("2001:db8::1"), nil)
+
+	d.DNSConfig.Servers = []string{"1.1.1.1"}
+	d.DNSRecords.Delete(targetHost)
+
+	ipv4, ipv6, _, err := d.archiveDNS(context.Background(), target)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// IPv4 should be nil when disabled
+	if ipv4 != nil {
+		t.Errorf("Expected no IPv4 address when disabled, got %v", ipv4)
+	}
+
+	// IPv6 should be returned
+	if ipv6 == nil {
+		t.Fatal("Expected IPv6 address")
+	}
+
+	if ipv6.To4() != nil {
+		t.Errorf("Expected IPv6 address, got IPv4: %v", ipv6)
+	}
+
+	// Verify that only AAAA queries were made (no A queries)
+	callLog := mock.getCallLog()
+	for _, call := range callLog {
+		t.Logf("DNS call to: %s", call)
+	}
+
+	t.Logf("disableIPv4=true: Resolved IPv6=%v, IPv4=%v", ipv6, ipv4)
+}
+
+// TestDisableIPv6 tests that disableIPv6 prevents IPv6 resolution and dialing
+func TestDisableIPv6(t *testing.T) {
+	d, cleanup := setupMock()
+	defer cleanup()
+
+	mock := newMockDNSClient()
+	d.DNSClient = mock
+	d.disableIPv4 = false
+	d.disableIPv6 = true
+
+	server1 := "1.1.1.1:53"
+	mock.setResponse(server1, net.ParseIP("192.0.2.1"), net.ParseIP("2001:db8::1"), nil)
+
+	d.DNSConfig.Servers = []string{"1.1.1.1"}
+	d.DNSRecords.Delete(targetHost)
+
+	ipv4, ipv6, _, err := d.archiveDNS(context.Background(), target)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// IPv6 should be nil when disabled
+	if ipv6 != nil {
+		t.Errorf("Expected no IPv6 address when disabled, got %v", ipv6)
+	}
+
+	// IPv4 should be returned
+	if ipv4 == nil {
+		t.Fatal("Expected IPv4 address")
+	}
+
+	if ipv4.To4() == nil {
+		t.Errorf("Expected IPv4 address, got: %v", ipv4)
+	}
+
+	// Verify that only A queries were made (no AAAA queries)
+	callLog := mock.getCallLog()
+	for _, call := range callLog {
+		t.Logf("DNS call to: %s", call)
+	}
+
+	t.Logf("disableIPv6=true: Resolved IPv4=%v, IPv6=%v", ipv4, ipv6)
+}
+
+// TestDisableBothIPv4AndIPv6 tests that disabling both returns an error
+func TestDisableBothIPv4AndIPv6(t *testing.T) {
+	d, cleanup := setupMock()
+	defer cleanup()
+
+	mock := newMockDNSClient()
+	d.DNSClient = mock
+	d.disableIPv4 = true
+	d.disableIPv6 = true
+
+	server1 := "1.1.1.1:53"
+	mock.setResponse(server1, net.ParseIP("192.0.2.1"), net.ParseIP("2001:db8::1"), nil)
+
+	d.DNSConfig.Servers = []string{"1.1.1.1"}
+	d.DNSRecords.Delete(targetHost)
+
+	ipv4, ipv6, _, err := d.archiveDNS(context.Background(), target)
+
+	// Should fail because no address family is available
+	if err == nil {
+		t.Errorf("Expected error when both IPv4 and IPv6 are disabled, got ipv4=%v ipv6=%v", ipv4, ipv6)
+	}
+
+	t.Logf("disableIPv4=true, disableIPv6=true: Got expected error: %v", err)
+}
+
+// TestDisableIPv4WithIPv4OnlyHost tests error when IPv4 is disabled but host only has IPv4
+func TestDisableIPv4WithIPv4OnlyHost(t *testing.T) {
+	d, cleanup := setupMock()
+	defer cleanup()
+
+	mock := newMockDNSClient()
+	d.DNSClient = mock
+	d.disableIPv4 = true
+	d.disableIPv6 = false
+
+	server1 := "1.1.1.1:53"
+	// Host only has IPv4 address
+	mock.setResponse(server1, net.ParseIP("192.0.2.1"), nil, nil)
+
+	d.DNSConfig.Servers = []string{"1.1.1.1"}
+	d.DNSRecords.Delete(targetHost)
+
+	ipv4, ipv6, _, err := d.archiveDNS(context.Background(), target)
+
+	// Should fail because host has no IPv6 and IPv4 is disabled
+	if err == nil {
+		t.Errorf("Expected error when IPv4 disabled and host only has IPv4, got ipv4=%v ipv6=%v", ipv4, ipv6)
+	}
+
+	t.Logf("disableIPv4=true with IPv4-only host: Got expected error: %v", err)
+}
+
+// TestDisableIPv6WithIPv6OnlyHost tests error when IPv6 is disabled but host only has IPv6
+func TestDisableIPv6WithIPv6OnlyHost(t *testing.T) {
+	d, cleanup := setupMock()
+	defer cleanup()
+
+	mock := newMockDNSClient()
+	d.DNSClient = mock
+	d.disableIPv4 = false
+	d.disableIPv6 = true
+
+	server1 := "1.1.1.1:53"
+	// Host only has IPv6 address
+	mock.setResponse(server1, nil, net.ParseIP("2001:db8::1"), nil)
+
+	d.DNSConfig.Servers = []string{"1.1.1.1"}
+	d.DNSRecords.Delete(targetHost)
+
+	ipv4, ipv6, _, err := d.archiveDNS(context.Background(), target)
+
+	// Should fail because host has no IPv4 and IPv6 is disabled
+	if err == nil {
+		t.Errorf("Expected error when IPv6 disabled and host only has IPv6, got ipv4=%v ipv6=%v", ipv4, ipv6)
+	}
+
+	t.Logf("disableIPv6=true with IPv6-only host: Got expected error: %v", err)
+}
+
+// TestDisableIPv4CacheInteraction tests that cached results respect disableIPv4
+func TestDisableIPv4CacheInteraction(t *testing.T) {
+	d, cleanup := setupMock()
+	defer cleanup()
+
+	mock := newMockDNSClient()
+	d.DNSClient = mock
+
+	server1 := "1.1.1.1:53"
+	mock.setResponse(server1, net.ParseIP("192.0.2.1"), net.ParseIP("2001:db8::1"), nil)
+	d.DNSConfig.Servers = []string{"1.1.1.1"}
+
+	// First query with both enabled - populates cache
+	d.disableIPv4 = false
+	d.disableIPv6 = false
+	d.DNSRecords.Delete(targetHost)
+
+	ipv4, ipv6, cached, err := d.archiveDNS(context.Background(), target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cached {
+		t.Error("Expected uncached result on first query")
+	}
+	if ipv4 == nil || ipv6 == nil {
+		t.Errorf("Expected both IPs on first query, got ipv4=%v ipv6=%v", ipv4, ipv6)
+	}
+
+	// Second query with IPv4 disabled - cached results should be filtered
+	d.disableIPv4 = true
+	ipv4, ipv6, cached, err = d.archiveDNS(context.Background(), target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cached {
+		t.Error("Expected cached result on second query")
+	}
+	// IPv4 should be filtered out even from cached results
+	if ipv4 != nil {
+		t.Errorf("Expected IPv4 to be nil when disabled, got %v", ipv4)
+	}
+	if ipv6 == nil {
+		t.Error("Expected IPv6 to be returned from cache")
+	}
+	t.Logf("Cached query with disableIPv4=true: ipv4=%v ipv6=%v cached=%v", ipv4, ipv6, cached)
+}
+
+// TestDisableIPv6CacheInteraction tests that cached results respect disableIPv6
+func TestDisableIPv6CacheInteraction(t *testing.T) {
+	d, cleanup := setupMock()
+	defer cleanup()
+
+	mock := newMockDNSClient()
+	d.DNSClient = mock
+
+	server1 := "1.1.1.1:53"
+	mock.setResponse(server1, net.ParseIP("192.0.2.1"), net.ParseIP("2001:db8::1"), nil)
+	d.DNSConfig.Servers = []string{"1.1.1.1"}
+
+	// First query with both enabled - populates cache
+	d.disableIPv4 = false
+	d.disableIPv6 = false
+	d.DNSRecords.Delete(targetHost)
+
+	ipv4, ipv6, cached, err := d.archiveDNS(context.Background(), target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cached {
+		t.Error("Expected uncached result on first query")
+	}
+	if ipv4 == nil || ipv6 == nil {
+		t.Errorf("Expected both IPs on first query, got ipv4=%v ipv6=%v", ipv4, ipv6)
+	}
+
+	// Second query with IPv6 disabled - cached results should be filtered
+	d.disableIPv6 = true
+	ipv4, ipv6, cached, err = d.archiveDNS(context.Background(), target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cached {
+		t.Error("Expected cached result on second query")
+	}
+	// IPv6 should be filtered out even from cached results
+	if ipv6 != nil {
+		t.Errorf("Expected IPv6 to be nil when disabled, got %v", ipv6)
+	}
+	if ipv4 == nil {
+		t.Error("Expected IPv4 to be returned from cache")
+	}
+	t.Logf("Cached query with disableIPv6=true: ipv4=%v ipv6=%v cached=%v", ipv4, ipv6, cached)
+}
+
+// TestDisableBothCacheInteraction tests error when both are disabled with cached results
+func TestDisableBothCacheInteraction(t *testing.T) {
+	d, cleanup := setupMock()
+	defer cleanup()
+
+	mock := newMockDNSClient()
+	d.DNSClient = mock
+
+	server1 := "1.1.1.1:53"
+	mock.setResponse(server1, net.ParseIP("192.0.2.1"), net.ParseIP("2001:db8::1"), nil)
+	d.DNSConfig.Servers = []string{"1.1.1.1"}
+
+	// First query with both enabled - populates cache
+	d.disableIPv4 = false
+	d.disableIPv6 = false
+	d.DNSRecords.Delete(targetHost)
+
+	_, _, _, err := d.archiveDNS(context.Background(), target)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Second query with both disabled - should error even with cached results
+	d.disableIPv4 = true
+	d.disableIPv6 = true
+	_, _, _, err = d.archiveDNS(context.Background(), target)
+	if err == nil {
+		t.Error("Expected error when both IPv4 and IPv6 are disabled with cached results")
+	}
+	t.Logf("Cached query with both disabled: got expected error: %v", err)
 }

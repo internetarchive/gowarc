@@ -9,50 +9,75 @@ import (
 	"github.com/miekg/dns"
 )
 
-func (d *customDialer) archiveDNS(ctx context.Context, address string) (resolvedIP net.IP, cached bool, err error) {
+// dnsResult holds both IPv4 and IPv6 addresses from DNS resolution
+type dnsResult struct {
+	ipv4 net.IP
+	ipv6 net.IP
+}
+
+func (d *customDialer) archiveDNS(ctx context.Context, address string) (ipv4, ipv6 net.IP, cached bool, err error) {
 	// Get the address without the port if there is one
-	address, _, err = net.SplitHostPort(address)
+	host, _, err := net.SplitHostPort(address)
 	if err != nil {
-		return resolvedIP, false, err
+		return nil, nil, false, err
 	}
 
 	// Check if the address is already an IP
-	resolvedIP = net.ParseIP(address)
-	if resolvedIP != nil {
-		return resolvedIP, false, nil
+	if ip := net.ParseIP(host); ip != nil {
+		if ip.To4() != nil {
+			if d.disableIPv4 {
+				return nil, nil, false, fmt.Errorf("IPv4 is disabled but address %s is IPv4", host)
+			}
+			return ip, nil, false, nil
+		}
+		if d.disableIPv6 {
+			return nil, nil, false, fmt.Errorf("IPv6 is disabled but address %s is IPv6", host)
+		}
+		return nil, ip, false, nil
 	}
 
 	// Check cache first
-	if cachedIP, ok := d.DNSRecords.Get(address); ok {
-		return cachedIP, true, nil
+	if cached, ok := d.DNSRecords.Get(host); ok {
+		ipv4, ipv6 := cached.ipv4, cached.ipv6
+		// Filter cached results based on disabled settings - this is probably unneeded as in a singular gowarc invocation we are expecting the same settings, but...
+		if d.disableIPv4 {
+			ipv4 = nil
+		}
+		if d.disableIPv6 {
+			ipv6 = nil
+		}
+		if ipv4 == nil && ipv6 == nil {
+			return nil, nil, true, fmt.Errorf("no suitable IP address found for %s (cached)", host)
+		}
+		return ipv4, ipv6, true, nil
 	}
 
 	if len(d.DNSConfig.Servers) == 0 {
-		return nil, false, fmt.Errorf("no DNS servers configured")
+		return nil, nil, false, fmt.Errorf("no DNS servers configured")
 	}
 
-	var ipv4, ipv6 net.IP
 	var errA, errAAAA error
-
-	ipv4, ipv6, errA, errAAAA = d.concurrentDNSLookup(ctx, address, len(d.DNSConfig.Servers))
+	ipv4, ipv6, errA, errAAAA = d.concurrentDNSLookup(ctx, host, len(d.DNSConfig.Servers))
 	if errA != nil && errAAAA != nil {
-		return nil, false, fmt.Errorf("failed to resolve DNS: A error: %v, AAAA error: %v", errA, errAAAA)
+		return nil, nil, false, fmt.Errorf("failed to resolve DNS: A error: %v, AAAA error: %v", errA, errAAAA)
 	}
 
-	// Prioritize IPv6 if both are available and enabled
-	if ipv6 != nil && !d.disableIPv6 {
-		resolvedIP = ipv6
-	} else if ipv4 != nil && !d.disableIPv4 {
-		resolvedIP = ipv4
+	// Filter based on disabled settings
+	if d.disableIPv4 {
+		ipv4 = nil
+	}
+	if d.disableIPv6 {
+		ipv6 = nil
 	}
 
-	if resolvedIP != nil {
-		// Cache the result
-		d.DNSRecords.Set(address, resolvedIP)
-		return resolvedIP, false, nil
+	if ipv4 == nil && ipv6 == nil {
+		return nil, nil, false, fmt.Errorf("no suitable IP address found for %s", host)
 	}
 
-	return nil, false, fmt.Errorf("no suitable IP address found for %s", address)
+	// Cache both results
+	d.DNSRecords.Set(host, dnsResult{ipv4: ipv4, ipv6: ipv6})
+
+	return ipv4, ipv6, false, nil
 }
 
 // concurrentDNSLookup tries DNS servers with configurable concurrency
