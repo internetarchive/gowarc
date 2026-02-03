@@ -611,7 +611,7 @@ func (d *customDialer) writeWARCFromConnection(ctx context.Context, reqPipe, res
 						}
 						return
 					}
-					d.client.dedupeHashTable.Store(r.Header.Get("WARC-Payload-Digest"), revisitRecord{
+					d.client.dedupeHashTable.Set(r.Header.Get("WARC-Payload-Digest"), revisitRecord{
 						responseUUID: recordIDs[i],
 						size:         getContentLength(r.Content),
 						targetURI:    warcTargetURI,

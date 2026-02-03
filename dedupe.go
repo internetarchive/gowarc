@@ -27,6 +27,7 @@ type DedupeOptions struct {
 	DoppelgangerHost   string
 	CDXCookie          string
 	SizeThreshold      int
+	DedupeCacheSize    int
 	LocalDedupe        bool
 	CDXDedupe          bool
 	DoppelgangerDedupe bool
@@ -40,9 +41,9 @@ type revisitRecord struct {
 }
 
 func (d *customDialer) checkLocalRevisit(digest string) revisitRecord {
-	revisit, exists := d.client.dedupeHashTable.Load(digest)
+	revisit, exists := d.client.dedupeHashTable.Get(digest)
 	if exists {
-		return revisit.(revisitRecord)
+		return revisit
 	}
 
 	return revisitRecord{}
@@ -51,7 +52,7 @@ func (d *customDialer) checkLocalRevisit(digest string) revisitRecord {
 func checkCDXRevisit(CDXURL string, digest string, targetURI string, cookie string) (revisitRecord, error) {
 	// CDX expects no hash header. For now we need to strip it.
 	digest = strings.SplitN(digest, ":", 2)[1]
-	
+
 	req, err := http.NewRequest("GET", CDXURL+"/web/timemap/cdx?url="+url.QueryEscape(targetURI)+"&limit=-1", nil)
 	if err != nil {
 		return revisitRecord{}, err
@@ -95,7 +96,7 @@ func checkCDXRevisit(CDXURL string, digest string, targetURI string, cookie stri
 func checkDoppelgangerRevisit(DoppelgangerHost string, digest string, targetURI string) (revisitRecord, error) {
 	// Doppelganger is not expecting a hash header either but this will all be rewritten ... shortly...
 	digest = strings.SplitN(digest, ":", 2)[1]
-	
+
 	req, err := http.NewRequest("GET", DoppelgangerHost+"/api/records/"+digest+"?uri="+targetURI, nil)
 	if err != nil {
 		return revisitRecord{}, err

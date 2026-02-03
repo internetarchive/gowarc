@@ -6,6 +6,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/maypok86/otter"
 )
 
 type Error struct {
@@ -44,7 +46,7 @@ type HTTPClientSettings struct {
 type CustomHTTPClient struct {
 	interfacesWatcherStop    chan bool
 	WaitGroup                *WaitGroupWithCount
-	dedupeHashTable          *sync.Map
+	dedupeHashTable          *otter.Cache[string, revisitRecord]
 	ErrChan                  chan *Error
 	WARCWriter               chan *RecordBatch
 	interfacesWatcherStarted chan bool
@@ -60,6 +62,7 @@ type CustomHTTPClient struct {
 	FullOnDisk             bool
 	DigestAlgorithm        DigestAlgorithm
 	closeDNSCache          func()
+	closeDedupeCache       func()
 	// MaxRAMUsageFraction is the fraction of system RAM above which we'll force spooling to disk. For example, 0.5 = 50%.
 	// If set to <= 0, the default value is DefaultMaxRAMUsageFraction.
 	MaxRAMUsageFraction float64
@@ -99,6 +102,7 @@ func (c *CustomHTTPClient) Close() error {
 	}
 
 	c.closeDNSCache()
+	c.closeDedupeCache()
 
 	return nil
 }
@@ -132,7 +136,23 @@ func NewWARCWritingHTTPClient(HTTPClientSettings HTTPClientSettings) (httpClient
 
 	// Toggle deduplication options and create map for deduplication records.
 	httpClient.dedupeOptions = HTTPClientSettings.DedupeOptions
-	httpClient.dedupeHashTable = new(sync.Map)
+
+	// Set default dedupe cache size to 1M entries if not specified
+	dedupeCacheSize := HTTPClientSettings.DedupeOptions.DedupeCacheSize
+	if dedupeCacheSize == 0 {
+		dedupeCacheSize = 1_000_000
+	}
+
+	dedupeCache, err := otter.MustBuilder[string, revisitRecord](dedupeCacheSize).Build()
+	if err != nil {
+		return nil, err
+	}
+	httpClient.dedupeHashTable = &dedupeCache
+
+	httpClient.closeDedupeCache = func() {
+		httpClient.dedupeHashTable.Close()
+		time.Sleep(1 * time.Second)
+	}
 
 	// Set default deduplication threshold to 2048 bytes
 	if httpClient.dedupeOptions.SizeThreshold == 0 {
