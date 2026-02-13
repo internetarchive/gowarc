@@ -286,6 +286,59 @@ func testFileRevisitVailidity(t *testing.T, path string, originalTime string, or
 	}
 }
 
+// testFileTLSHeaders validates that WARC-Cipher-Suite and WARC-Protocol headers are present
+// for request and response records when the connection was made over TLS.
+func testFileTLSHeaders(t *testing.T, path string) {
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("failed to open %q: %v", path, err)
+	}
+	defer file.Close()
+
+	t.Logf("checking 'WARC-Cipher-Suite' and 'WARC-Protocol' on %q", path)
+
+	reader, err := NewReader(file)
+	if err != nil {
+		t.Fatalf("warc.NewReader failed for %q: %v", path, err)
+	}
+
+	for {
+		record, err := reader.ReadRecord()
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			t.Fatalf("warc.ReadRecord failed: %v", err)
+			break
+		}
+
+		recordType := record.Header.Get("WARC-Type")
+		if recordType == "request" || recordType == "response" {
+			cipherSuite := record.Header.Get("WARC-Cipher-Suite")
+			protocol := record.Header.Get("WARC-Protocol")
+
+			if cipherSuite == "" {
+				t.Errorf("WARC-Cipher-Suite header missing for %s record", recordType)
+			} else {
+				t.Logf("WARC-Cipher-Suite: %s", cipherSuite)
+			}
+
+			if protocol == "" {
+				t.Errorf("WARC-Protocol header missing for %s record", recordType)
+			} else if !strings.HasPrefix(protocol, "tls/") {
+				t.Errorf("WARC-Protocol should start with 'tls/' for HTTPS, got: %s", protocol)
+			} else {
+				t.Logf("WARC-Protocol: %s", protocol)
+			}
+		}
+
+		err = record.Content.Close()
+		if err != nil {
+			t.Fatalf("failed to close record content: %v", err)
+		}
+	}
+}
+
 func testFileEarlyEOF(t *testing.T, path string) {
 	file, err := os.Open(path)
 	if err != nil {
