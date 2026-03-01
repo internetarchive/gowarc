@@ -1,11 +1,16 @@
 package warc
 
 import (
+	"compress/zlib"
 	"crypto/tls"
+	"errors"
+	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	gzip "github.com/klauspost/compress/gzip"
+	"github.com/klauspost/compress/zstd"
 )
 
 type customTransport struct {
@@ -13,9 +18,32 @@ type customTransport struct {
 	decompressBody bool
 }
 
+type readerAndCloser struct {
+	io.Reader
+	io.Closer
+}
+
+type multiCloser struct {
+	closers []io.Closer
+}
+
+func newMultiCloser(closers ...io.Closer) *multiCloser {
+	return &multiCloser{closers: closers}
+}
+
+func (m *multiCloser) Close() error {
+	var err error
+	for _, closer := range m.closers {
+		if e := closer.Close(); e != nil {
+			err = errors.Join(err, e)
+		}
+	}
+	return err
+}
+
 func (t *customTransport) RoundTrip(req *http.Request) (resp *http.Response, err error) {
 	req = req.Clone(req.Context())
-	req.Header.Set("Accept-Encoding", "gzip")
+	req.Header.Set("Accept-Encoding", "gzip, deflate, zstd")
 
 	resp, err = t.t.RoundTrip(req)
 	if err != nil {
@@ -24,14 +52,44 @@ func (t *customTransport) RoundTrip(req *http.Request) (resp *http.Response, err
 
 	// if the client have been created with decompressBody = true,
 	// we decompress the resp.Body if we received a compressed body
+	originalBody := resp.Body
 	if t.decompressBody {
-		switch resp.Header.Get("Content-Encoding") {
+		switch strings.ToLower(resp.Header.Get("Content-Encoding")) {
 		case "gzip":
-			resp.Body, err = gzip.NewReader(resp.Body)
+			gzReader, err := gzip.NewReader(originalBody)
+			if err != nil {
+				originalBody.Close()
+				return resp, err
+			}
+			resp.Body = &readerAndCloser{
+				Reader: gzReader,
+				Closer: newMultiCloser(originalBody, gzReader),
+			}
+		case "deflate":
+			zlibReader, err := zlib.NewReader(originalBody)
+			if err != nil {
+				originalBody.Close()
+				return resp, err
+			}
+			resp.Body = &readerAndCloser{
+				Reader: zlibReader,
+				Closer: newMultiCloser(originalBody, zlibReader),
+			}
+		case "zstd":
+			zstdReader, err := zstd.NewReader(originalBody)
+			if err != nil {
+				originalBody.Close()
+				return resp, err
+			}
+			zstdReaderCloser := zstdReader.IOReadCloser()
+			resp.Body = &readerAndCloser{
+				Reader: zstdReaderCloser,
+				Closer: newMultiCloser(originalBody, zstdReaderCloser),
+			}
 		}
 	}
 
-	return
+	return resp, nil
 }
 
 func newCustomTransport(dialer *customDialer, decompressBody bool, TLSHandshakeTimeout time.Duration) (t *customTransport, err error) {
