@@ -1631,7 +1631,7 @@ func TestHTTPClientWithZStandard(t *testing.T) {
 		rotatorSettings = defaultRotatorSettings(t)
 		err             error
 	)
-	rotatorSettings.Compression = "ZSTD"
+	rotatorSettings.Compression = CompressionZstd
 
 	// init test HTTP endpoint
 	server := newTestImageServer(t, http.StatusOK)
@@ -1675,7 +1675,7 @@ func TestHTTPClientWithZStandardDictionary(t *testing.T) {
 		rotatorSettings = defaultRotatorSettings(t)
 		err             error
 	)
-	rotatorSettings.Compression = "ZSTD"
+	rotatorSettings.Compression = CompressionZstd
 	// Use predefined compression dictionary in testdata to compress with.
 	rotatorSettings.CompressionDictionary = "testdata/dictionary"
 
@@ -1917,7 +1917,7 @@ func BenchmarkConcurrentUnder2MBZStandard(b *testing.B) {
 		errWg           sync.WaitGroup
 		err             error
 	)
-	rotatorSettings.Compression = "ZSTD"
+	rotatorSettings.Compression = CompressionZstd
 
 	// init test HTTP endpoint
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -2040,7 +2040,7 @@ func BenchmarkConcurrentOver2MBZStandard(b *testing.B) {
 		errWg           sync.WaitGroup
 		err             error
 	)
-	rotatorSettings.Compression = "ZSTD"
+	rotatorSettings.Compression = CompressionZstd
 
 	// init test HTTP endpoint
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
