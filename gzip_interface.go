@@ -10,6 +10,7 @@ import (
 type GzipWriterInterface interface {
 	io.WriteCloser
 	Flush() error
+	Reset(w io.Writer)
 }
 
 // GzipReaderInterface defines the interface for gzip readers

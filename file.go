@@ -11,7 +11,7 @@ import (
 
 // generateWARCFilename generate a WARC file name following recommendations of the specs:
 // Prefix-Timestamp-Serial-Crawlhost.warc.gz
-func generateWARCFilename(prefix string, compression string, serial *atomic.Uint64) string {
+func generateWARCFilename(prefix string, compression compressionType, serial *atomic.Uint64) string {
 	var filename strings.Builder
 
 	filename.WriteString(prefix)
@@ -46,13 +46,15 @@ func generateWARCFilename(prefix string, compression string, serial *atomic.Uint
 	filename.WriteString(hostName)
 
 	var fileExt string
-	switch strings.ToLower(compression) {
-	case "gzip":
+	switch compression {
+	case CompressionGzip:
 		fileExt = ".warc.gz.open"
-	case "zstd":
+	case CompressionZstd:
 		fileExt = ".warc.zst.open"
-	default:
+	case CompressionNone:
 		fileExt = ".warc.open"
+	default:
+		panic("invalid compression algorithm: " + compression.Name)
 	}
 
 	filename.WriteString(fileExt)

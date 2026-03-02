@@ -8,18 +8,21 @@ import (
 	"strings"
 	"time"
 
-	"github.com/internetarchive/gowarc/pkg/spooledtempfile"
 	"github.com/google/uuid"
-	"github.com/klauspost/compress/zstd"
+	"github.com/internetarchive/gowarc/pkg/spooledtempfile"
 )
+
+type Compressor interface {
+	io.WriteCloser
+	Reset(io.Writer)
+}
 
 // Writer writes WARC records to WARC files.
 type Writer struct {
-	GZIPWriter      GzipWriterInterface
-	ZSTDWriter      *zstd.Encoder
+	Compressor      Compressor
 	FileWriter      *bufio.Writer
 	FileName        string
-	Compression     string
+	Compression     compressionType
 	DigestAlgorithm DigestAlgorithm
 	ParallelGZIP    bool
 }

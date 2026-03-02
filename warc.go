@@ -3,11 +3,37 @@ package warc
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"strings"
 	"sync/atomic"
 )
+
+type compressionType struct {
+	Name string
+}
+
+var (
+	CompressionNone = compressionType{"none"}
+	CompressionGzip = compressionType{"gzip"}
+	CompressionZstd = compressionType{"zstd"}
+
+	CompressionTypes = []compressionType{CompressionNone, CompressionGzip, CompressionZstd}
+)
+
+func MustCompressionTypeFromString(s string) compressionType {
+	switch strings.ToLower(s) {
+	case "none":
+		return CompressionNone
+	case "gzip":
+		return CompressionGzip
+	case "zstd":
+		return CompressionZstd
+	default:
+		panic(fmt.Sprintf("invalid compression type: %s", s))
+	}
+}
 
 // RotatorSettings is used to store the settings
 // needed by recordWriter to write WARC files
@@ -20,7 +46,7 @@ type RotatorSettings struct {
 	// Prefix-Timestamp-Serial-Crawlhost.warc.gz
 	Prefix string
 	// Compression algorithm to use
-	Compression string
+	Compression compressionType
 	// Payload digest calculation algorithm to use
 	digestAlgorithm DigestAlgorithm
 	// Path to a ZSTD compression dictionary to embed (and use) in .warc.zst files
@@ -81,17 +107,26 @@ func (s *RotatorSettings) NewWARCRotator() (recordWriterChan chan *RecordBatch, 
 	return recordWriterChan, doneChannels, nil
 }
 
+// reset resets the compressed writer to write to a new output.
+// This reuse the encoder's internal buffers.
+func (w *Writer) Reset(output io.Writer) {
+	if w.Compressor != nil {
+		w.Compressor.Reset(output)
+		w.FileWriter.Reset(w.Compressor)
+	} else {
+		w.FileWriter.Reset(output)
+	}
+}
+
 func (w *Writer) CloseCompressedWriter() (err error) {
-	if w.GZIPWriter != nil {
-		err = w.GZIPWriter.Close()
-	} else if w.ZSTDWriter != nil {
-		err = w.ZSTDWriter.Close()
+	if w.Compressor != nil {
+		err = w.Compressor.Close()
 	}
 
 	return err
 }
 
-func getNextWARCFilename(outputDir, prefix, compression string, serial *atomic.Uint64) (nextWARCFilename string) {
+func getNextWARCFilename(outputDir, prefix string, compression compressionType, serial *atomic.Uint64) (nextWARCFilename string) {
 	nextWARCFilename = generateWARCFilename(prefix, compression, serial)
 	_, err := os.Stat(path.Join(outputDir, nextWARCFilename))
 	for !errors.Is(err, os.ErrNotExist) {
@@ -119,7 +154,7 @@ func recordWriter(settings *RotatorSettings, records chan *RecordBatch, done cha
 	}
 
 	// Initialize WARC writer
-	warcWriter, err := NewWriter(warcFile, currentFileName, settings.digestAlgorithm, settings.Compression, "", true, dictionary)
+	warcWriter, err := NewWriter(warcFile, currentFileName, settings.digestAlgorithm, settings.Compression, true, dictionary)
 	if err != nil {
 		panic(err)
 	}
@@ -131,13 +166,13 @@ func recordWriter(settings *RotatorSettings, records chan *RecordBatch, done cha
 	}
 
 	// If compression is enabled, we close the record's GZIP chunk
-	if settings.Compression != "" {
+	if settings.Compression != CompressionNone {
 		err = warcWriter.CloseCompressedWriter()
 		if err != nil {
 			panic(err)
 		}
 
-		warcWriter, err = NewWriter(warcFile, currentFileName, settings.digestAlgorithm, settings.Compression, "", false, dictionary)
+		warcWriter, err = NewWriter(warcFile, currentFileName, settings.digestAlgorithm, settings.Compression, false, dictionary)
 		if err != nil {
 			panic(err)
 		}
@@ -156,7 +191,7 @@ func recordWriter(settings *RotatorSettings, records chan *RecordBatch, done cha
 
 				// We flush the data and close the file
 				warcWriter.FileWriter.Flush()
-				if settings.Compression != "" {
+				if settings.Compression != CompressionNone {
 					err = warcWriter.CloseCompressedWriter()
 					if err != nil {
 						panic(err)
@@ -176,7 +211,7 @@ func recordWriter(settings *RotatorSettings, records chan *RecordBatch, done cha
 				}
 
 				// Initialize new WARC writer
-				warcWriter, err = NewWriter(warcFile, currentFileName, settings.digestAlgorithm, settings.Compression, "", true, dictionary)
+				warcWriter, err = NewWriter(warcFile, currentFileName, settings.digestAlgorithm, settings.Compression, true, dictionary)
 				if err != nil {
 					panic(err)
 				}
@@ -188,7 +223,7 @@ func recordWriter(settings *RotatorSettings, records chan *RecordBatch, done cha
 				}
 
 				// If compression is enabled, we close the record's GZIP chunk
-				if settings.Compression != "" {
+				if settings.Compression != CompressionNone {
 					err = warcWriter.CloseCompressedWriter()
 					if err != nil {
 						panic(err)
@@ -198,10 +233,7 @@ func recordWriter(settings *RotatorSettings, records chan *RecordBatch, done cha
 
 			// Write all the records of the record batch
 			for _, record := range recordBatch.Records {
-				warcWriter, err = NewWriter(warcFile, currentFileName, settings.digestAlgorithm, settings.Compression, record.Header.Get("Content-Length"), false, dictionary)
-				if err != nil {
-					panic(err)
-				}
+				warcWriter.Reset(warcFile)
 
 				record.Header.Set("WARC-Date", recordBatch.CaptureTime)
 				record.Header.Set("WARC-Warcinfo-ID", "<urn:uuid:"+currentWarcinfoRecordID+">")
@@ -212,7 +244,7 @@ func recordWriter(settings *RotatorSettings, records chan *RecordBatch, done cha
 				}
 
 				// If compression is enabled, we close the record's GZIP chunk
-				if settings.Compression != "" {
+				if settings.Compression != CompressionNone {
 					err = warcWriter.CloseCompressedWriter()
 					if err != nil {
 						panic(err)
@@ -233,7 +265,7 @@ func recordWriter(settings *RotatorSettings, records chan *RecordBatch, done cha
 			// Channel has been closed
 			// We flush the data, close the file, and rename it
 			warcWriter.FileWriter.Flush()
-			if settings.Compression != "" {
+			if settings.Compression != CompressionNone {
 				err = warcWriter.CloseCompressedWriter()
 				if err != nil {
 					panic(err)
