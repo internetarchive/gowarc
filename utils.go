@@ -49,7 +49,6 @@ func NewWriter(writer io.Writer, fileName string, digestAlgorithm DigestAlgorith
 			FileName:        fileName,
 			DigestAlgorithm: digestAlgorithm,
 			Compressor:      gzipWriter,
-			Compression:     compression,
 			FileWriter:      bufio.NewWriter(gzipWriter),
 		}, nil
 	case CompressionZstd:

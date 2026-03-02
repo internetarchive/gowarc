@@ -22,7 +22,6 @@ type Writer struct {
 	Compressor      Compressor
 	FileWriter      *bufio.Writer
 	FileName        string
-	Compression     compressionType
 	DigestAlgorithm DigestAlgorithm
 	ParallelGZIP    bool
 }
