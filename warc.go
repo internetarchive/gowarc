@@ -106,7 +106,7 @@ func (s *RotatorSettings) NewWARCRotator() (recordWriterChan chan *RecordBatch, 
 }
 
 // reset resets the compressed writer to write to a new output.
-// This reuse the encoder's internal buffers.
+// This reuses the encoder's internal buffers.
 func (w *Writer) Reset(output io.Writer) {
 	if w.Compressor != nil {
 		w.Compressor.Reset(output)
