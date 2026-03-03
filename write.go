@@ -127,7 +127,7 @@ func (w *Writer) WriteRecord(r *Record) (recordID string, err error) {
 	return recordID, nil
 }
 
-// WriteInfoRecord method can be used to write informations record to the WARC file and flushes the data
+// WriteInfoRecord method can be used to write an information record to the WARC file and flush the data
 func (w *Writer) WriteInfoRecord(payload map[string]string) (recordID string, err error) {
 	// Initialize the record
 	infoRecord := NewRecord("", false)
