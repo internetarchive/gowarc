@@ -39,6 +39,39 @@ func isHTTPRequest(line string) bool {
 	return false
 }
 
+func writeDictionaryHeader(writer io.Writer, dictionary []byte) error {
+	dictionaryZstdwriter, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedBetterCompression))
+	if err != nil {
+		return err
+	}
+	defer dictionaryZstdwriter.Close()
+
+	// Compress dictionary with ZSTD.
+	// TODO: Option to allow uncompressed dictionary (maybe? not sure there's any need.)
+	payload := dictionaryZstdwriter.EncodeAll(dictionary, nil)
+
+	// Magic number for skippable dictionary frame (0x184D2A5D).
+	// https://github.com/ArchiveTeam/wget-lua/releases/tag/v1.20.3-at.20200401.01
+	// https://iipc.github.io/warc-specifications/specifications/warc-zstd/
+	magic := uint32(0x184D2A5D)
+
+	// Create the frame header (magic + payload size)
+	header := make([]byte, 8)
+	binary.LittleEndian.PutUint32(header[:4], magic)
+	binary.LittleEndian.PutUint32(header[4:], uint32(len(payload)))
+
+	// Combine header and payload together into a full frame.
+	frame := append(header, payload...)
+
+	// Write generated frame directly to WARC file.
+	// The regular ZStandard writer will continue afterwards with normal ZStandard frames.
+	if _, err := writer.Write(frame); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 // NewWriter creates a new WARC writer.
 func NewWriter(writer io.Writer, fileName string, digestAlgorithm DigestAlgorithm, compression compressionType, newFileCreation bool, dictionary []byte) (*Writer, error) {
 	switch compression {
@@ -49,68 +82,38 @@ func NewWriter(writer io.Writer, fileName string, digestAlgorithm DigestAlgorith
 			FileName:        fileName,
 			DigestAlgorithm: digestAlgorithm,
 			Compressor:      gzipWriter,
-			FileWriter:      bufio.NewWriter(gzipWriter),
+			BufWriter:       bufio.NewWriter(gzipWriter),
 		}, nil
 	case CompressionZstd:
 		if newFileCreation && len(dictionary) > 0 {
-			dictionaryZstdwriter, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedBetterCompression))
-			if err != nil {
-				return nil, err
-			}
-
-			// Compress dictionary with ZSTD.
-			// TODO: Option to allow uncompressed dictionary (maybe? not sure there's any need.)
-			payload := dictionaryZstdwriter.EncodeAll(dictionary, nil)
-
-			// Magic number for skippable dictionary frame (0x184D2A5D).
-			// https://github.com/ArchiveTeam/wget-lua/releases/tag/v1.20.3-at.20200401.01
-			// https://iipc.github.io/warc-specifications/specifications/warc-zstd/
-			magic := uint32(0x184D2A5D)
-
-			// Create the frame header (magic + payload size)
-			header := make([]byte, 8)
-			binary.LittleEndian.PutUint32(header[:4], magic)
-			binary.LittleEndian.PutUint32(header[4:], uint32(len(payload)))
-
-			// Combine header and payload together into a full frame.
-			frame := append(header, payload...)
-
-			// Write generated frame directly to WARC file.
-			// The regular ZStandard writer will continue afterwards with normal ZStandard frames.
-			if _, err := writer.Write(frame); err != nil {
+			if err := writeDictionaryHeader(writer, dictionary); err != nil {
 				return nil, err
 			}
 		}
 
 		// Create ZStandard writer either with or without the encoder dictionary and return it.
+		var zstdWriter *zstd.Encoder
+		var err error
+		eopts := []zstd.EOption{zstd.WithEncoderLevel(zstd.SpeedBetterCompression)}
 		if len(dictionary) > 0 {
-			zstdWriter, err := zstd.NewWriter(writer, zstd.WithEncoderLevel(zstd.SpeedBetterCompression), zstd.WithEncoderDict(dictionary))
-			if err != nil {
-				return nil, err
-			}
-			return &Writer{
-				FileName:        fileName,
-				DigestAlgorithm: digestAlgorithm,
-				Compressor:      zstdWriter,
-				FileWriter:      bufio.NewWriter(zstdWriter),
-			}, nil
-		} else {
-			zstdWriter, err := zstd.NewWriter(writer, zstd.WithEncoderLevel(zstd.SpeedBetterCompression))
-			if err != nil {
-				return nil, err
-			}
-			return &Writer{
-				FileName:        fileName,
-				DigestAlgorithm: digestAlgorithm,
-				Compressor:      zstdWriter,
-				FileWriter:      bufio.NewWriter(zstdWriter),
-			}, nil
+			eopts = append(eopts, zstd.WithEncoderDict(dictionary))
 		}
+		zstdWriter, err = zstd.NewWriter(writer, eopts...)
+		if err != nil {
+			return nil, err
+		}
+
+		return &Writer{
+			FileName:        fileName,
+			DigestAlgorithm: digestAlgorithm,
+			Compressor:      zstdWriter,
+			BufWriter:       bufio.NewWriter(zstdWriter),
+		}, nil
 	case CompressionNone:
 		return &Writer{
 			FileName:        fileName,
 			DigestAlgorithm: digestAlgorithm,
-			FileWriter:      bufio.NewWriter(writer),
+			BufWriter:       bufio.NewWriter(writer),
 		}, nil
 	default:
 		return nil, fmt.Errorf("invalid compression algorithm: %s", compression)

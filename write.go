@@ -13,14 +13,15 @@ import (
 )
 
 type Compressor interface {
-	io.WriteCloser
+	io.Writer // This writer can't be used for actual writing, it's only for Compressor.Reset()
+	io.Closer
 	Reset(io.Writer)
 }
 
 // Writer writes WARC records to WARC files.
 type Writer struct {
 	Compressor      Compressor
-	FileWriter      *bufio.Writer
+	BufWriter       *bufio.Writer
 	FileName        string
 	DigestAlgorithm DigestAlgorithm
 	ParallelGZIP    bool
@@ -45,7 +46,7 @@ type Record struct {
 	Size    int64  // COMPRESSED size of the record (gzip member): header + deflate data + trailer. (-1 if WARC file type is not supported yet)
 }
 
-// WriteRecord writes a record to the underlying WARC file.
+// WriteRecord writes a record to the underlying WARC file and flushes the data.
 // A record consists of a version string, the record header followed by a
 // record content block and two newlines:
 //
@@ -74,7 +75,7 @@ func (w *Writer) WriteRecord(r *Record) (recordID string, err error) {
 		r.Header.Set("WARC-Record-ID", "<urn:uuid:"+recordID+">")
 	}
 
-	if _, err := io.WriteString(w.FileWriter, "WARC/1.1\r\n"); err != nil {
+	if _, err := io.WriteString(w.BufWriter, "WARC/1.1\r\n"); err != nil {
 		return recordID, err
 	}
 
@@ -95,17 +96,17 @@ func (w *Writer) WriteRecord(r *Record) (recordID string, err error) {
 	}
 
 	for key, value := range r.Header {
-		if _, err := io.WriteString(w.FileWriter, fmt.Sprintf("%s: %s\r\n", key, value)); err != nil {
+		if _, err := io.WriteString(w.BufWriter, fmt.Sprintf("%s: %s\r\n", key, value)); err != nil {
 			return recordID, err
 		}
 	}
 
-	if _, err := io.WriteString(w.FileWriter, "\r\n"); err != nil {
+	if _, err := io.WriteString(w.BufWriter, "\r\n"); err != nil {
 		return recordID, err
 	}
 
 	r.Content.Seek(0, 0)
-	if written, err = io.Copy(w.FileWriter, r.Content); err != nil {
+	if written, err = io.Copy(w.BufWriter, r.Content); err != nil {
 		return recordID, err
 	}
 
@@ -113,17 +114,20 @@ func (w *Writer) WriteRecord(r *Record) (recordID string, err error) {
 		DataTotal.Add(written)
 	}
 
-	if _, err := io.WriteString(w.FileWriter, "\r\n\r\n"); err != nil {
+	if _, err := io.WriteString(w.BufWriter, "\r\n\r\n"); err != nil {
 		return recordID, err
 	}
 
 	// Flush data
-	w.FileWriter.Flush()
+	err = w.FlushAndCloseCompressor()
+	if err != nil {
+		return recordID, err
+	}
 
 	return recordID, nil
 }
 
-// WriteInfoRecord method can be used to write informations record to the WARC file
+// WriteInfoRecord method can be used to write informations record to the WARC file and flushes the data
 func (w *Writer) WriteInfoRecord(payload map[string]string) (recordID string, err error) {
 	// Initialize the record
 	infoRecord := NewRecord("", false)
@@ -152,8 +156,6 @@ func (w *Writer) WriteInfoRecord(payload map[string]string) (recordID string, er
 	if err != nil {
 		return recordID, err
 	}
-
-	w.FileWriter.Flush()
 
 	return recordID, err
 }

@@ -110,18 +110,24 @@ func (s *RotatorSettings) NewWARCRotator() (recordWriterChan chan *RecordBatch, 
 func (w *Writer) Reset(output io.Writer) {
 	if w.Compressor != nil {
 		w.Compressor.Reset(output)
-		w.FileWriter.Reset(w.Compressor)
+		w.BufWriter.Reset(w.Compressor)
 	} else {
-		w.FileWriter.Reset(output)
+		w.BufWriter.Reset(output)
 	}
 }
 
-func (w *Writer) CloseCompressedWriter() (err error) {
+// Close will flush the final output and close the stream.
+// The function will block until everything has been written.
+// The [Compressor] can still be re-used after calling this.
+// If the [Compressor] is nil, this will just flush the [Writer.BufWriter].
+func (w *Writer) FlushAndCloseCompressor() (err error) {
 	if w.Compressor != nil {
-		err = w.Compressor.Close()
+		err1 := w.BufWriter.Flush()
+		err2 := w.Compressor.Close()
+		return errors.Join(err1, err2)
+	} else {
+		return w.BufWriter.Flush()
 	}
-
-	return err
 }
 
 func getNextWARCFilename(outputDir, prefix string, compression compressionType, serial *atomic.Uint64) (nextWARCFilename string) {
@@ -151,7 +157,7 @@ func recordWriter(settings *RotatorSettings, records chan *RecordBatch, done cha
 		panic(err)
 	}
 
-	// Initialize WARC writer
+	// Initialize WARC writer (write dictionary if specified)
 	warcWriter, err := NewWriter(warcFile, currentFileName, settings.digestAlgorithm, settings.Compression, true, dictionary)
 	if err != nil {
 		panic(err)
@@ -163,43 +169,23 @@ func recordWriter(settings *RotatorSettings, records chan *RecordBatch, done cha
 		panic(err)
 	}
 
-	// If compression is enabled, we close the record's GZIP chunk
-	if settings.Compression != CompressionNone {
-		err = warcWriter.CloseCompressedWriter()
-		if err != nil {
-			panic(err)
-		}
-
-		warcWriter, err = NewWriter(warcFile, currentFileName, settings.digestAlgorithm, settings.Compression, false, dictionary)
-		if err != nil {
-			panic(err)
-		}
-	}
-
 	for {
 		recordBatch, more := <-records
 		if more {
 			if isFileSizeExceeded(warcFile, settings.WARCSize) {
 				// WARC file size exceeded settings.WarcSize
-				// The WARC file is renamed to remove the .open suffix
-				err := os.Rename(path.Join(settings.OutputDirectory, currentFileName), strings.TrimSuffix(path.Join(settings.OutputDirectory, currentFileName), ".open"))
-				if err != nil {
-					panic(err)
-				}
-
 				// We flush the data and close the file
-				err = warcWriter.FileWriter.Flush()
+				err = warcWriter.FlushAndCloseCompressor()
 				if err != nil {
 					panic(err)
-				}
-				if settings.Compression != CompressionNone {
-					err = warcWriter.CloseCompressedWriter()
-					if err != nil {
-						panic(err)
-					}
 				}
 
 				err = warcFile.Close()
+				if err != nil {
+					panic(err)
+				}
+				// The WARC file is renamed to remove the .open suffix
+				err := os.Rename(path.Join(settings.OutputDirectory, currentFileName), strings.TrimSuffix(path.Join(settings.OutputDirectory, currentFileName), ".open"))
 				if err != nil {
 					panic(err)
 				}
@@ -222,14 +208,6 @@ func recordWriter(settings *RotatorSettings, records chan *RecordBatch, done cha
 				if err != nil {
 					panic(err)
 				}
-
-				// If compression is enabled, we close the record's GZIP chunk
-				if settings.Compression != CompressionNone {
-					err = warcWriter.CloseCompressedWriter()
-					if err != nil {
-						panic(err)
-					}
-				}
 			}
 
 			// Write all the records of the record batch
@@ -243,19 +221,6 @@ func recordWriter(settings *RotatorSettings, records chan *RecordBatch, done cha
 				if err != nil {
 					panic(err)
 				}
-
-				// If compression is enabled, we close the record's GZIP chunk
-				if settings.Compression != CompressionNone {
-					err = warcWriter.CloseCompressedWriter()
-					if err != nil {
-						panic(err)
-					}
-				}
-			}
-
-			err = warcWriter.FileWriter.Flush()
-			if err != nil {
-				panic(err)
 			}
 
 			if recordBatch.FeedbackChan != nil {
@@ -265,15 +230,9 @@ func recordWriter(settings *RotatorSettings, records chan *RecordBatch, done cha
 		} else {
 			// Channel has been closed
 			// We flush the data, close the file, and rename it
-			err = warcWriter.FileWriter.Flush()
+			err = warcWriter.FlushAndCloseCompressor()
 			if err != nil {
 				panic(err)
-			}
-			if settings.Compression != CompressionNone {
-				err = warcWriter.CloseCompressedWriter()
-				if err != nil {
-					panic(err)
-				}
 			}
 
 			err = warcFile.Close()
