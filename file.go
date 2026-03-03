@@ -54,7 +54,7 @@ func generateWARCFilename(prefix string, compression compressionType, serial *at
 	case CompressionNone:
 		fileExt = ".warc.open"
 	default:
-		panic("invalid compression algorithm: " + compression)
+		panic(fmt.Sprintf("invalid compression algorithm: %v", compression))
 	}
 
 	filename.WriteString(fileExt)
