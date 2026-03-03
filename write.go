@@ -13,7 +13,7 @@ import (
 )
 
 type Compressor interface {
-	io.Writer // This writer can't be used for actual writing, it's only for Compressor.Reset()
+	io.Writer // Embedded so the compressor can be used as an io.Writer and its underlying writer can be replaced via Reset.
 	io.Closer
 	Reset(io.Writer)
 }
