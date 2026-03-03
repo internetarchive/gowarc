@@ -190,7 +190,10 @@ func recordWriter(settings *RotatorSettings, records chan *RecordBatch, done cha
 				}
 
 				// We flush the data and close the file
-				warcWriter.FileWriter.Flush()
+				err = warcWriter.FileWriter.Flush()
+				if err != nil {
+					panic(err)
+				}
 				if settings.Compression != CompressionNone {
 					err = warcWriter.CloseCompressedWriter()
 					if err != nil {
@@ -264,7 +267,10 @@ func recordWriter(settings *RotatorSettings, records chan *RecordBatch, done cha
 		} else {
 			// Channel has been closed
 			// We flush the data, close the file, and rename it
-			warcWriter.FileWriter.Flush()
+			err = warcWriter.FileWriter.Flush()
+			if err != nil {
+				panic(err)
+			}
 			if settings.Compression != CompressionNone {
 				err = warcWriter.CloseCompressedWriter()
 				if err != nil {
