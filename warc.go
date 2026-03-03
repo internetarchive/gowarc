@@ -10,17 +10,15 @@ import (
 	"sync/atomic"
 )
 
-type compressionType struct {
-	Name string
-}
+type compressionType string
 
-var (
-	CompressionNone = compressionType{"none"}
-	CompressionGzip = compressionType{"gzip"}
-	CompressionZstd = compressionType{"zstd"}
-
-	CompressionTypes = []compressionType{CompressionNone, CompressionGzip, CompressionZstd}
+const (
+	CompressionNone = compressionType("none")
+	CompressionGzip = compressionType("gzip")
+	CompressionZstd = compressionType("zstd")
 )
+
+var CompressionTypes = []compressionType{CompressionNone, CompressionGzip, CompressionZstd}
 
 func MustCompressionTypeFromString(s string) compressionType {
 	switch strings.ToLower(s) {

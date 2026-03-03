@@ -4,7 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/binary"
-	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -111,7 +111,7 @@ func NewWriter(writer io.Writer, fileName string, digestAlgorithm DigestAlgorith
 			FileWriter:      bufio.NewWriter(writer),
 		}, nil
 	default:
-		return nil, errors.New("invalid compression algorithm: " + compression.Name)
+		return nil, fmt.Errorf("invalid compression algorithm: %s", compression)
 	}
 }
 
@@ -192,7 +192,7 @@ func checkRotatorSettings(settings *RotatorSettings) (err error) {
 	switch settings.Compression {
 	case CompressionGzip, CompressionZstd, CompressionNone:
 	default:
-		return errors.New("invalid compression algorithm: " + settings.Compression.Name)
+		return fmt.Errorf("invalid compression algorithm: %s", settings.Compression)
 	}
 
 	// Add few headers to the warcinfo payload, to not have it empty
