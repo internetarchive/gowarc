@@ -77,7 +77,9 @@ func NewWriter(writer io.Writer, fileName string, digestAlgorithm DigestAlgorith
 
 			// Write generated frame directly to WARC file.
 			// The regular ZStandard writer will continue afterwards with normal ZStandard frames.
-			writer.Write(frame)
+			if _, err := writer.Write(frame); err != nil {
+				return nil, err
+			}
 		}
 
 		// Create ZStandard writer either with or without the encoder dictionary and return it.
