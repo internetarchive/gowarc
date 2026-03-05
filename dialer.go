@@ -202,7 +202,7 @@ func (d *customDialer) dialSingle(ctx context.Context, network, address string, 
 	return d.DialContext(ctx, network, address)
 }
 
-func newCustomDialer(httpClient *CustomHTTPClient, proxyURL string, DialTimeout, DNSRecordsTTL, DNSResolutionTimeout time.Duration, DNSCacheSize int, DNSServers []string, DNSConcurrency int, disableIPv4, disableIPv6 bool) (d *customDialer, err error) {
+func newCustomDialer(httpClient *CustomHTTPClient, proxyURL string, DialTimeout, DNSRecordsTTL, DNSResolutionTimeout time.Duration, DNSCacheSize int, DNSServers []string, DNSFallback *dns.ClientConfig, DNSConcurrency int, disableIPv4, disableIPv6 bool) (d *customDialer, err error) {
 	d = new(customDialer)
 
 	d.Timeout = DialTimeout
@@ -222,8 +222,13 @@ func newCustomDialer(httpClient *CustomHTTPClient, proxyURL string, DialTimeout,
 	d.DNSRecords = &DNScache
 
 	d.DNSConfig, err = dns.ClientConfigFromFile("/etc/resolv.conf")
-	if err != nil {
-		return nil, err
+	if err != nil || d.DNSConfig == nil {
+		// Use provided fallback or return error if /etc/resolv.conf is not available
+		if DNSFallback != nil {
+			d.DNSConfig = DNSFallback
+		} else {
+			return nil, err
+		}
 	}
 
 	if len(DNSServers) > 0 {
