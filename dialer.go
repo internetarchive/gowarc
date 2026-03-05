@@ -547,6 +547,29 @@ func (d *customDialer) writeWARCFromConnection(ctx context.Context, reqPipe, res
 		slices.Reverse(batch.Records)
 	}
 
+	var selectedCipherSuite string
+	var selectedProtocol string
+
+	if cc, ok := conn.(*tls.UConn); ok {
+		state := cc.ConnectionState()
+		// Use tls.CipherSuiteName for efficient lookup
+		selectedCipherSuite = tls.CipherSuiteName(state.CipherSuite)
+		// Add the negotiated protocol version
+		// Values as defined in WARC proposal https://github.com/iipc/warc-specifications/issues/42
+		switch state.Version {
+		case tls.VersionSSL30:
+			selectedProtocol = "ssl/3"
+		case tls.VersionTLS10:
+			selectedProtocol = "tls/1.0"
+		case tls.VersionTLS11:
+			selectedProtocol = "tls/1.1"
+		case tls.VersionTLS12:
+			selectedProtocol = "tls/1.2"
+		case tls.VersionTLS13:
+			selectedProtocol = "tls/1.3"
+		}
+	}
+
 	var warcTargetURI string
 	select {
 	case recv, ok := <-targetURIRespCh:
@@ -572,6 +595,14 @@ func (d *customDialer) writeWARCFromConnection(ctx context.Context, reqPipe, res
 			}
 
 			r.Header.Set("WARC-Record-ID", "<urn:uuid:"+recordIDs[i]+">")
+
+			if selectedCipherSuite != "" {
+				r.Header.Set("WARC-Cipher-Suite", selectedCipherSuite)
+			}
+
+			if selectedProtocol != "" {
+				r.Header.Set("WARC-Protocol", selectedProtocol)
+			}
 
 			if i == len(recordIDs)-1 {
 				r.Header.Set("WARC-Concurrent-To", "<urn:uuid:"+recordIDs[0]+">")
