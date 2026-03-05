@@ -238,6 +238,33 @@ func isGzipFile(filepath string) bool {
 	return header[0] == 0x1f && header[1] == 0x8b
 }
 
+func isCompressedFile(filepath string) bool {
+    file, err := os.Open(filepath)
+    if err != nil {
+        return false
+    }
+    defer file.Close()
+
+    header := make([]byte, 4)
+    n, err := file.Read(header)
+    if err != nil || n < 4 {
+        return false
+    }
+
+    // gzip magic
+    if header[0] == 0x1f && header[1] == 0x8b {
+        return true
+    }
+
+    // zstd magic 28 B5 2F FD
+    if header[0] == 0x28 && header[1] == 0xB5 && header[2] == 0x2F && header[3] == 0xFD {
+        return true
+    }
+
+    return false
+}
+
+
 func analyzeWARCFile(filepath string, verbose bool, force bool) mendResult {
 	result := mendResult{
 		filepath: filepath,
@@ -253,25 +280,26 @@ func analyzeWARCFile(filepath string, verbose bool, force bool) mendResult {
 			return result
 		}
 
-		// Only support gzip-compressed WARC files (.gz.open)
-		if !strings.HasSuffix(strings.ToLower(filepath), ".gz.open") {
-			slog.Error("only gzip-compressed WARC files (.gz.open) are supported", "file", filepath)
+		// Support gzip (.gz.open) and zstd (.zst.open)
+		lower := strings.ToLower(filepath)
+		if !(strings.HasSuffix(lower, ".gz.open") || strings.HasSuffix(lower, ".zst.open")) {
+			slog.Error("only gzip or zstd WARC files (.gz.open or .zst.open) are supported", "file", filepath)
 			return result
-		}
-	} else {
+		}else {
 		// With --force, process any gzip WARC file (.gz or .gz.open)
-		if !strings.HasSuffix(strings.ToLower(filepath), ".gz") &&
-			!strings.HasSuffix(strings.ToLower(filepath), ".gz.open") {
-			slog.Error("only gzip-compressed WARC files (.gz or .gz.open) are supported", "file", filepath)
-			return result
-		}
+		if !(strings.HasSuffix(lower, ".gz") || strings.HasSuffix(lower, ".gz.open") || strings.HasSuffix(lower, ".zst") || strings.HasSuffix(lower, ".zst.open")) {
+		slog.Error("only gzip or zstd WARC files (.gz/.zst/.gz.open/.zst.open) are supported", "file", filepath)
+		return result
+}
+
 	}
 
 	// Verify the file is actually gzip compressed by checking magic bytes
-	if !isGzipFile(filepath) {
-		slog.Error("file is not gzip compressed (must be gzip (.gz) format)", "file", filepath)
-		return result
+	if !isCompressedFile(filepath) {
+    slog.Error("file is not gzip or zstd compressed", "file", filepath)
+    return result
 	}
+
 
 	// Get file size
 	fileInfo, err := os.Stat(filepath)
