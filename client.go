@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/maypok86/otter"
+	"github.com/miekg/dns"
 )
 
 type Error struct {
@@ -21,6 +22,7 @@ type HTTPClientSettings struct {
 	TempDir               string
 	DiscardHook           DiscardHook
 	DNSServers            []string
+	DNSFallback           *dns.ClientConfig
 	DedupeOptions         DedupeOptions
 	DialTimeout           time.Duration
 	ResponseHeaderTimeout time.Duration
@@ -236,7 +238,7 @@ func NewWARCWritingHTTPClient(HTTPClientSettings HTTPClientSettings) (httpClient
 	httpClient.ConnReadDeadline = HTTPClientSettings.ConnReadDeadline
 
 	// Configure custom dialer / transport
-	customDialer, err := newCustomDialer(httpClient, HTTPClientSettings.Proxy, HTTPClientSettings.DialTimeout, HTTPClientSettings.DNSRecordsTTL, HTTPClientSettings.DNSResolutionTimeout, HTTPClientSettings.DNSCacheSize, HTTPClientSettings.DNSServers, HTTPClientSettings.DNSConcurrency, HTTPClientSettings.DisableIPv4, HTTPClientSettings.DisableIPv6)
+	customDialer, err := newCustomDialer(httpClient, HTTPClientSettings.Proxy, HTTPClientSettings.DialTimeout, HTTPClientSettings.DNSRecordsTTL, HTTPClientSettings.DNSResolutionTimeout, HTTPClientSettings.DNSCacheSize, HTTPClientSettings.DNSServers, HTTPClientSettings.DNSFallback, HTTPClientSettings.DNSConcurrency, HTTPClientSettings.DisableIPv4, HTTPClientSettings.DisableIPv6)
 	if err != nil {
 		return nil, err
 	}
