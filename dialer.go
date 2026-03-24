@@ -39,6 +39,11 @@ const (
 	// This is used internally to retrieve the wrapped connection for advanced use cases.
 	// Use WithWrappedConnection() helper function for convenience.
 	ContextKeyWrappedConn contextKey = "wrappedConn"
+
+	// ContextKeyProxy is the context key for per-request proxy override.
+	// When provided, the request will use this proxy instead of the client-level default.
+	// Use WithProxy() helper function for convenience.
+	ContextKeyProxy contextKey = "proxy"
 )
 
 // WithFeedbackChannel adds a feedback channel to the request context.
@@ -62,6 +67,19 @@ func WithWrappedConnection(ctx context.Context, wrappedConnChan chan *CustomConn
 	return context.WithValue(ctx, ContextKeyWrappedConn, wrappedConnChan)
 }
 
+// WithProxy adds a per-request proxy URL to the request context.
+// When provided, this proxy will be used instead of the client-level default.
+// Pass an empty string to force a direct connection, bypassing any default proxy.
+func WithProxy(ctx context.Context, proxyURL string) context.Context {
+	return context.WithValue(ctx, ContextKeyProxy, proxyURL)
+}
+
+// resolvedProxy holds the proxy dialer and its DNS behavior for a single dial operation.
+type resolvedProxy struct {
+	dialer        proxy.ContextDialer
+	needsHostname bool
+}
+
 // dnsExchanger is an interface for DNS clients that can exchange messages
 type dnsExchanger interface {
 	ExchangeContext(ctx context.Context, m *dns.Msg, address string) (r *dns.Msg, rtt time.Duration, err error)
@@ -69,7 +87,8 @@ type dnsExchanger interface {
 
 type customDialer struct {
 	proxyDialer        proxy.ContextDialer
-	proxyNeedsHostname bool // true if proxy requires hostname (socks5h, http), false if can use IP (socks5)
+	proxyNeedsHostname bool     // true if proxy requires hostname (socks5h, http), false if can use IP (socks5)
+	proxyCache         sync.Map // caches *resolvedProxy by proxy URL string
 	client             *CustomHTTPClient
 	DNSConfig          *dns.ClientConfig
 	DNSClient          dnsExchanger
@@ -79,6 +98,43 @@ type customDialer struct {
 	disableIPv6        bool
 	dnsConcurrency     int
 	dnsRoundRobinIndex atomic.Uint32
+}
+
+// Returns the configured proxy for a given request context.
+// The per-request proxy takes precedence over the client-level default.
+// An empty string explicitly forces a direct connection (bypasses the default proxy).
+// Returns nil if no proxy is configured.
+func (d *customDialer) resolveProxy(ctx context.Context) (*resolvedProxy, error) {
+	if proxyURL, ok := ctx.Value(ContextKeyProxy).(string); ok {
+		if proxyURL == "" {
+			return nil, nil
+		}
+		if cached, ok := d.proxyCache.Load(proxyURL); ok {
+			return cached.(*resolvedProxy), nil
+		}
+
+		u, err := url.Parse(proxyURL)
+		if err != nil {
+			return nil, err
+		}
+
+		pd, err := proxy.FromURL(u, d)
+		if err != nil {
+			return nil, err
+		}
+
+		rp := &resolvedProxy{
+			dialer:        pd.(proxy.ContextDialer),
+			needsHostname: u.Scheme == "socks5h" || u.Scheme == "socks4a" || u.Scheme == "http" || u.Scheme == "https",
+		}
+		d.proxyCache.Store(proxyURL, rp)
+		return rp, nil
+	}
+
+	if d.proxyDialer != nil {
+		return &resolvedProxy{dialer: d.proxyDialer, needsHostname: d.proxyNeedsHostname}, nil
+	}
+	return nil, nil
 }
 
 var emptyPayloadDigests = []string{
@@ -104,16 +160,16 @@ type dialResult struct {
 // It returns the first established connection and closes the other.
 // Otherwise it returns an error from the primary address.
 // This implements Happy Eyeballs (RFC 8305).
-func (d *customDialer) dialParallel(ctx context.Context, network string, primaryAddr, fallbackAddr string, primaryIP, fallbackIP net.IP) (net.Conn, net.IP, error) {
+func (d *customDialer) dialParallel(ctx context.Context, network string, primaryAddr, fallbackAddr string, primaryIP, fallbackIP net.IP, rp *resolvedProxy) (net.Conn, net.IP, error) {
 	if fallbackAddr == "" && primaryAddr == "" {
 		return nil, nil, errors.New("no addresses available")
 	}
 	if fallbackAddr == "" {
-		conn, err := d.dialSingle(ctx, network+"6", primaryAddr, primaryIP)
+		conn, err := d.dialSingle(ctx, network+"6", primaryAddr, primaryIP, rp)
 		return conn, primaryIP, err
 	}
 	if primaryAddr == "" {
-		conn, err := d.dialSingle(ctx, network+"4", fallbackAddr, fallbackIP)
+		conn, err := d.dialSingle(ctx, network+"4", fallbackAddr, fallbackIP, rp)
 		return conn, fallbackIP, err
 	}
 
@@ -131,7 +187,7 @@ func (d *customDialer) dialParallel(ctx context.Context, network string, primary
 		} else {
 			addr, ip, netType = fallbackAddr, fallbackIP, network+"4"
 		}
-		conn, err := d.dialSingle(ctx, netType, addr, ip)
+		conn, err := d.dialSingle(ctx, netType, addr, ip, rp)
 		select {
 		case results <- dialResult{conn: conn, err: err, primary: primary, done: true, ip: ip}:
 		case <-returned:
@@ -180,9 +236,9 @@ func (d *customDialer) dialParallel(ctx context.Context, network string, primary
 }
 
 // dialSingle performs a single dial attempt
-func (d *customDialer) dialSingle(ctx context.Context, network, address string, resolvedIP net.IP) (net.Conn, error) {
-	if d.proxyDialer != nil {
-		return d.proxyDialer.DialContext(ctx, network, address)
+func (d *customDialer) dialSingle(ctx context.Context, network, address string, resolvedIP net.IP, rp *resolvedProxy) (net.Conn, error) {
+	if rp != nil {
+		return rp.dialer.DialContext(ctx, network, address)
 	}
 
 	if d.client.randomLocalIP {
@@ -348,10 +404,15 @@ func (d *customDialer) wrapConnection(ctx context.Context, c net.Conn, scheme st
 }
 
 func (d *customDialer) CustomDialContext(ctx context.Context, network, address string) (conn net.Conn, err error) {
-	if d.proxyDialer != nil && d.proxyNeedsHostname {
+	rp, err := d.resolveProxy(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if rp != nil && rp.needsHostname {
 		// Remote DNS proxy (socks5h, socks4a, http, https)
 		// Skip DNS archiving to avoid privacy leak and ensure accuracy.
-		conn, err = d.proxyDialer.DialContext(ctx, network, address)
+		conn, err = rp.dialer.DialContext(ctx, network, address)
 
 		if err != nil {
 			return nil, err
@@ -381,7 +442,7 @@ func (d *customDialer) CustomDialContext(ctx context.Context, network, address s
 	}
 
 	// Use Happy Eyeballs: IPv6 primary, IPv4 fallback
-	conn, _, err = d.dialParallel(ctx, network, ipv6Addr, ipv4Addr, ipv6, ipv4)
+	conn, _, err = d.dialParallel(ctx, network, ipv6Addr, ipv4Addr, ipv6, ipv4, rp)
 
 	if err != nil {
 		return nil, err
@@ -396,12 +457,16 @@ func (d *customDialer) CustomDial(network, address string) (net.Conn, error) {
 
 func (d *customDialer) CustomDialTLSContext(ctx context.Context, network, address string) (net.Conn, error) {
 	var plainConn net.Conn
-	var err error
 
-	if d.proxyDialer != nil && d.proxyNeedsHostname {
+	rp, err := d.resolveProxy(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if rp != nil && rp.needsHostname {
 		// Remote DNS proxy (socks5h, socks4a, http, https)
 		// Skip DNS archiving to avoid privacy leak and ensure accuracy.
-		plainConn, err = d.proxyDialer.DialContext(ctx, network, address)
+		plainConn, err = rp.dialer.DialContext(ctx, network, address)
 		if err != nil {
 			return nil, err
 		}
@@ -430,7 +495,7 @@ func (d *customDialer) CustomDialTLSContext(ctx context.Context, network, addres
 		}
 
 		// Use Happy Eyeballs: IPv6 primary, IPv4 fallback
-		plainConn, _, err = d.dialParallel(ctx, network, ipv6Addr, ipv4Addr, ipv6, ipv4)
+		plainConn, _, err = d.dialParallel(ctx, network, ipv6Addr, ipv4Addr, ipv6, ipv4, rp)
 		if err != nil {
 			return nil, err
 		}
@@ -568,7 +633,8 @@ func (d *customDialer) writeWARCFromConnection(ctx context.Context, reqPipe, res
 		case <-ctx.Done():
 			return
 		default:
-			if d.proxyDialer == nil {
+			perRequestProxy, _ := ctx.Value(ContextKeyProxy).(string)
+			if d.proxyDialer == nil && perRequestProxy == "" {
 				switch addr := conn.RemoteAddr().(type) {
 				case *net.TCPAddr:
 					IP := addr.IP.String()
