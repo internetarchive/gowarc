@@ -115,6 +115,22 @@ func main() {
 	<-feedbackChan
 }
 ```
+### Per-Request Proxy
+
+By default, the proxy configured in `HTTPClientSettings` applies to all requests. You can override it on a per-request basis using `WithProxy`:
+
+```go
+req, err := http.NewRequest("GET", "https://example.com", nil)
+if err != nil {
+	panic(err)
+}
+
+// Use a different proxy for this specific request
+req = req.WithContext(warc.WithProxy(req.Context(), "socks5://other-proxy:1080"))
+resp, err := client.Do(req)
+```
+
+This follows the same context-based pattern as `WithFeedbackChannel`. Proxy dialers are cached internally, so reusing the same proxy URL across requests is efficient.
 
 ### DNS Resolution and Proxy Behavior
 
