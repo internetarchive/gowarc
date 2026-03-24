@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -128,6 +129,40 @@ func newTestImageServer(t testing.TB, st int) *httptest.Server {
 		w.WriteHeader(st)
 		w.Write(fileBytes)
 	}))
+}
+
+// socks5.RuleSet that permits all connections and increments a counter on every request
+type countingRuleSet struct {
+	count atomic.Int64
+}
+
+func (r *countingRuleSet) Allow(ctx context.Context, req *socks5.Request) (context.Context, bool) {
+	r.count.Add(1)
+	return ctx, true
+}
+
+// starts a SOCKS5 proxy on a random port and returns its
+// address, a connection counter, and a cleanup function that stops the server.
+func startSOCKS5Server(t *testing.T) (addr string, counter *atomic.Int64, cleanup func()) {
+	t.Helper()
+	rule := &countingRuleSet{}
+	proxyServer := socks5.NewServer(socks5.WithRule(rule))
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen for proxy: %v", err)
+	}
+	stopChan := make(chan struct{})
+	go func() {
+		defer listener.Close()
+		go func() {
+			<-stopChan
+			listener.Close()
+		}()
+		if err := proxyServer.Serve(listener); err != nil && !strings.Contains(err.Error(), "use of closed network connection") {
+			panic(err)
+		}
+	}()
+	return listener.Addr().String(), &rule.count, func() { close(stopChan) }
 }
 
 func (e *errorReadCloser) Read(p []byte) (int, error) {
@@ -649,46 +684,18 @@ func TestHTTPClientDNSFailure(t *testing.T) {
 }
 
 func TestHTTPClientWithProxy(t *testing.T) {
-	var (
-		rotatorSettings = defaultRotatorSettings(t)
-		err             error
-	)
+	rotatorSettings := defaultRotatorSettings(t)
 
-	// init socks5 proxy server
-	proxyServer := socks5.NewServer()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("failed to listen for proxy: %v", err)
-	}
+	proxyAddr, proxyCounter, stopProxy := startSOCKS5Server(t)
+	defer stopProxy()
 
-	// Create a channel to signal server stop
-	stopChan := make(chan struct{})
-
-	go func() {
-		defer listener.Close()
-
-		go func() {
-			<-stopChan
-			listener.Close()
-		}()
-
-		if err := proxyServer.Serve(listener); err != nil && !strings.Contains(err.Error(), "use of closed network connection") {
-			panic(err)
-		}
-	}()
-
-	proxyAddr := listener.Addr().String()
-	// Defer sending the stop signal
-	defer close(stopChan)
-
-	// init test HTTP endpoint
 	server := newTestImageServer(t, http.StatusOK)
 	defer server.Close()
 
-	// init the HTTP client responsible for recording HTTP(s) requests / responses
 	httpClient, err := NewWARCWritingHTTPClient(HTTPClientSettings{
 		RotatorSettings: rotatorSettings,
-		Proxy:           fmt.Sprintf("socks5://%s", proxyAddr)})
+		Proxy:           fmt.Sprintf("socks5://%s", proxyAddr),
+	})
 	if err != nil {
 		t.Fatalf("Unable to init WARC writing HTTP client: %s", err)
 	}
@@ -710,6 +717,10 @@ func TestHTTPClientWithProxy(t *testing.T) {
 	httpClient.Close()
 	waitForErrors()
 
+	if c := proxyCounter.Load(); c != 1 {
+		t.Fatalf("expected proxy to handle 1 connection, got %d", c)
+	}
+
 	files, err := filepath.Glob(rotatorSettings.OutputDirectory + "/*")
 	if err != nil {
 		t.Fatal(err)
@@ -717,6 +728,223 @@ func TestHTTPClientWithProxy(t *testing.T) {
 
 	for _, path := range files {
 		testFileSingleHashCheck(t, path, "sha1:UIRWL5DFIPQ4MX3D3GFHM2HCVU3TZ6I3", []string{"26872"}, 1, server.URL+"/")
+	}
+}
+
+func TestHTTPClientWithPerRequestProxy(t *testing.T) {
+	rotatorSettings := defaultRotatorSettings(t)
+
+	proxyAddr, proxyCounter, stopProxy := startSOCKS5Server(t)
+	defer stopProxy()
+
+	server := newTestImageServer(t, http.StatusOK)
+	defer server.Close()
+
+	// Client created with NO default proxy
+	httpClient, err := NewWARCWritingHTTPClient(HTTPClientSettings{
+		RotatorSettings: rotatorSettings,
+	})
+	if err != nil {
+		t.Fatalf("Unable to init WARC writing HTTP client: %s", err)
+	}
+	waitForErrors := drainErrChan(t, httpClient.ErrChan)
+
+	req, err := http.NewRequest("GET", server.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Set proxy on this specific request via context
+	req = req.WithContext(WithProxy(req.Context(), fmt.Sprintf("socks5://%s", proxyAddr)))
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	io.Copy(io.Discard, resp.Body)
+
+	httpClient.Close()
+	waitForErrors()
+
+	if c := proxyCounter.Load(); c != 1 {
+		t.Fatalf("expected proxy to handle 1 connection, got %d", c)
+	}
+
+	files, err := filepath.Glob(rotatorSettings.OutputDirectory + "/*")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, path := range files {
+		testFileSingleHashCheck(t, path, "sha1:UIRWL5DFIPQ4MX3D3GFHM2HCVU3TZ6I3", []string{"26872"}, 1, server.URL+"/")
+	}
+}
+
+func TestHTTPClientPerRequestProxyOverridesDefault(t *testing.T) {
+	rotatorSettings := defaultRotatorSettings(t)
+
+	// Proxy A: a live proxy set as the client default (should NOT be used)
+	proxyAAddr, proxyACounter, stopProxyA := startSOCKS5Server(t)
+	defer stopProxyA()
+
+	// Proxy B: the per-request override (should be used)
+	proxyBAddr, proxyBCounter, stopProxyB := startSOCKS5Server(t)
+	defer stopProxyB()
+
+	server := newTestImageServer(t, http.StatusOK)
+	defer server.Close()
+
+	// Client created with proxy A as the default
+	httpClient, err := NewWARCWritingHTTPClient(HTTPClientSettings{
+		RotatorSettings: rotatorSettings,
+		Proxy:           fmt.Sprintf("socks5://%s", proxyAAddr),
+	})
+	if err != nil {
+		t.Fatalf("Unable to init WARC writing HTTP client: %s", err)
+	}
+	waitForErrors := drainErrChan(t, httpClient.ErrChan)
+
+	req, err := http.NewRequest("GET", server.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Override with proxy B
+	req = req.WithContext(WithProxy(req.Context(), fmt.Sprintf("socks5://%s", proxyBAddr)))
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	io.Copy(io.Discard, resp.Body)
+
+	httpClient.Close()
+	waitForErrors()
+
+	if c := proxyACounter.Load(); c != 0 {
+		t.Fatalf("expected default proxy A to handle 0 connections, got %d", c)
+	}
+	if c := proxyBCounter.Load(); c != 1 {
+		t.Fatalf("expected per-request proxy B to handle 1 connection, got %d", c)
+	}
+
+	files, err := filepath.Glob(rotatorSettings.OutputDirectory + "/*")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, path := range files {
+		testFileSingleHashCheck(t, path, "sha1:UIRWL5DFIPQ4MX3D3GFHM2HCVU3TZ6I3", []string{"26872"}, 1, server.URL+"/")
+	}
+}
+
+func TestHTTPClientPerRequestProxyBypassDefault(t *testing.T) {
+	rotatorSettings := defaultRotatorSettings(t)
+
+	// Start a live proxy and set it as the client default
+	proxyAddr, proxyCounter, stopProxy := startSOCKS5Server(t)
+	defer stopProxy()
+
+	server := newTestImageServer(t, http.StatusOK)
+	defer server.Close()
+
+	httpClient, err := NewWARCWritingHTTPClient(HTTPClientSettings{
+		RotatorSettings: rotatorSettings,
+		Proxy:           fmt.Sprintf("socks5://%s", proxyAddr),
+	})
+	if err != nil {
+		t.Fatalf("Unable to init WARC writing HTTP client: %s", err)
+	}
+	waitForErrors := drainErrChan(t, httpClient.ErrChan)
+
+	req, err := http.NewRequest("GET", server.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Force direct connection by passing empty string, bypassing the default proxy
+	req = req.WithContext(WithProxy(req.Context(), ""))
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	io.Copy(io.Discard, resp.Body)
+
+	httpClient.Close()
+	waitForErrors()
+
+	if c := proxyCounter.Load(); c != 0 {
+		t.Fatalf("expected default proxy to handle 0 connections (bypassed), got %d", c)
+	}
+
+	files, err := filepath.Glob(rotatorSettings.OutputDirectory + "/*")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, path := range files {
+		testFileSingleHashCheck(t, path, "sha1:UIRWL5DFIPQ4MX3D3GFHM2HCVU3TZ6I3", []string{"26872"}, 1, server.URL+"/")
+	}
+}
+
+func TestHTTPClientPerRequestProxyCacheReuse(t *testing.T) {
+	rotatorSettings := defaultRotatorSettings(t)
+
+	proxyAddr, proxyCounter, stopProxy := startSOCKS5Server(t)
+	defer stopProxy()
+
+	server := newTestImageServer(t, http.StatusOK)
+	defer server.Close()
+
+	httpClient, err := NewWARCWritingHTTPClient(HTTPClientSettings{
+		RotatorSettings: rotatorSettings,
+	})
+	if err != nil {
+		t.Fatalf("Unable to init WARC writing HTTP client: %s", err)
+	}
+	waitForErrors := drainErrChan(t, httpClient.ErrChan)
+
+	proxyURL := fmt.Sprintf("socks5://%s", proxyAddr)
+
+	// Make two requests through the same per-request proxy to exercise cache reuse
+	for i := 0; i < 2; i++ {
+		req, err := http.NewRequest("GET", server.URL, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		req = req.WithContext(WithProxy(req.Context(), proxyURL))
+
+		resp, err := httpClient.Do(req)
+		if err != nil {
+			t.Fatalf("request %d failed: %s", i, err)
+		}
+
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+	}
+
+	httpClient.Close()
+	waitForErrors()
+
+	if c := proxyCounter.Load(); c != 2 {
+		t.Fatalf("expected proxy to handle 2 connections, got %d", c)
+	}
+
+	files, err := filepath.Glob(rotatorSettings.OutputDirectory + "/*")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, path := range files {
+		testFileSingleHashCheck(t, path, "sha1:UIRWL5DFIPQ4MX3D3GFHM2HCVU3TZ6I3", []string{"26872"}, 2, server.URL+"/")
 	}
 }
 
