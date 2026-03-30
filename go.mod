@@ -10,7 +10,7 @@ require (
 	github.com/refraction-networking/utls v1.8.2
 	github.com/remeh/sizedwaitgroup v1.0.0
 	github.com/spf13/cobra v1.10.2
-	github.com/things-go/go-socks5 v0.1.0
+	github.com/things-go/go-socks5 v0.1.1
 	github.com/ulikunitz/xz v0.5.15
 	github.com/valyala/bytebufferpool v1.0.0
 	github.com/zeebo/blake3 v0.2.4
