@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/internetarchive/gowarc/cmd/warc/utils"
@@ -20,7 +21,7 @@ var Command = &cobra.Command{
 	Long: `Concatenate multiple WARC files into a single output WARC file.
 
 WARC files (including gzip-compressed ones) are simply concatenated at the
-byte level.
+byte level. The file list is sorted and deduplicated unless --no-dedup is specified.
 
 After a successful concatenation, the original input files are deleted unless
 --no-delete is specified.`,
@@ -31,6 +32,7 @@ After a successful concatenation, the original input files are deleted unless
 func init() {
 	Command.Flags().StringP("output", "o", "", "Output WARC file path (required)")
 	Command.Flags().Bool("no-delete", false, "Keep original files after concatenation")
+	Command.Flags().Bool("no-dedup", false, "Don't sort and dedup file list")
 	_ = Command.MarkFlagRequired("output")
 }
 
@@ -47,7 +49,17 @@ func concat(cmd *cobra.Command, files []string) {
 		return
 	}
 
+	noDedup, err := cmd.Flags().GetBool("no-dedup")
+	if err != nil {
+		slog.Error("failed to get no-dedup flag", "error", err)
+		return
+	}
 	startTime := time.Now()
+
+	if !noDedup {
+		slices.Sort(files)
+		files = slices.Compact(files)
+	}
 
 	// Verify all input files exist, check for dictionary-compressed zstd, and collect sizes
 	var totalInputBytes int64
