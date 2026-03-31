@@ -102,13 +102,13 @@ func concat(cmd *cobra.Command, files []string) {
 		return
 	}
 
-	// Detect if any input file is also the output path to prevent self-overwrite.
+	// Verify the output filepath won't collide with any existing files
 	if _, err := os.Stat(absOutput); err == nil {
 		slog.Error("output file already exists", "file", absOutput)
 		return
 	}
 
-	// Create (or replace) the output file
+	// Create the output file
 	out, err := os.Create(absOutput)
 	if err != nil {
 		slog.Error("failed to create output file", "file", absOutput, "error", err)
