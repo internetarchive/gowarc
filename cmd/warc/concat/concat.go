@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/internetarchive/gowarc/cmd/warc/utils"
 	"github.com/spf13/cobra"
 )
 
@@ -56,6 +57,10 @@ func concat(cmd *cobra.Command, files []string) {
 			slog.Error("input file not accessible", "file", f, "error", err)
 			return
 		}
+		if !info.Mode().IsRegular() {
+			slog.Error("input path is not a regular file", "file", f, "mode", info.Mode())
+			return
+		}
 		totalInputBytes += info.Size()
 
 		if hasDictionaryFrame(f) {
@@ -80,24 +85,18 @@ func concat(cmd *cobra.Command, files []string) {
 
 	// Ensure the output directory exists
 	outputDir := filepath.Dir(absOutput)
-	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+	if err := os.MkdirAll(outputDir, utils.DefaultDirPermissions); err != nil {
 		slog.Error("failed to create output directory", "dir", outputDir, "error", err)
 		return
 	}
 
-	// Detect if any input file is also the output path to prevent self-overwrite
-	for _, f := range files {
-		absInput, err := filepath.Abs(f)
-		if err != nil {
-			absInput = f
-		}
-		if absInput == absOutput {
-			slog.Error("output file is the same as one of the input files", "file", f)
-			return
-		}
+	// Detect if any input file is also the output path to prevent self-overwrite.
+	if _, err := os.Stat(absOutput); err == nil {
+		slog.Error("output file already exists", "file", absOutput)
+		return
 	}
 
-	// Create (or truncate) the output file
+	// Create (or replace) the output file
 	out, err := os.Create(absOutput)
 	if err != nil {
 		slog.Error("failed to create output file", "file", absOutput, "error", err)
