@@ -26,13 +26,13 @@ var loadStacks = []struct {
 	tls, h2, ipv6 bool
 }{
 	{"plain_H1_IPv4", false, false, false},
-	//{"plain_H1_IPv6", false, false, true},
+	{"plain_H1_IPv6", false, false, true},
 	{"plain_H2_IPv4", false, true, false},
-	//{"plain_H2_IPv6", false, true, true},
+	{"plain_H2_IPv6", false, true, true},
 	{"TLS_H1_IPv4", true, false, false},
-	//{"TLS_H1_IPv6", true, false, true},
+	{"TLS_H1_IPv6", true, false, true},
 	{"TLS_H2_IPv4", true, true, false},
-	//{"TLS_H2_IPv6", true, true, true},
+	{"TLS_H2_IPv6", true, true, true},
 }
 
 // Set this env var to route the "direct" subtest's traffic through a
@@ -263,7 +263,7 @@ func buildLoadImperatives(staticFile string) imperative.Imperatives {
 					Compress: compressions[r.IntN(len(compressions))],
 				},
 			},
-			Transport: imperative.Transport{Delay: r.IntN(20)},
+			Transport: imperative.Transport{Delay: r.IntN(1000)},
 		})
 	}
 
