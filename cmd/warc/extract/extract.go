@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -136,7 +137,7 @@ func writeFile(vmd *cobra.Command, resp *http.Response, record *warc.Record) err
 
 	// Truncate the filename if it's too long (keep the extension)
 	if len(filename) > utils.MaxFilenameLength {
-		extension := path.Ext(filename)
+		extension := filepath.Ext(filename)
 		filename = filename[:utils.MaxFilenameLength-len(extension)] + extension
 	}
 
@@ -162,15 +163,18 @@ func writeFile(vmd *cobra.Command, resp *http.Response, record *warc.Record) err
 			return err
 		}
 
-		err = os.MkdirAll(path.Join(outputDir, URL.Host), utils.DefaultDirPermissions)
+		err = os.MkdirAll(filepath.Join(outputDir, URL.Host), utils.DefaultDirPermissions)
 		if err != nil {
 			return err
 		}
 
-		outputDir = path.Join(outputDir, URL.Host)
+		outputDir = filepath.Join(outputDir, URL.Host)
 	}
 
-	outputPath := path.Join(outputDir, filename)
+	outputPath := filepath.Join(outputDir, filename)
+	if rel, err := filepath.Rel(outputDir, outputPath); err != nil || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || rel == ".." {
+		return fmt.Errorf("refusing to write outside output dir: %q", filename)
+	}
 	if _, err := os.Stat(outputPath); err == nil {
 		if vmd.Flags().Lookup("hash-suffix").Changed {
 			// Read the file to check the hash.
@@ -213,16 +217,19 @@ func writeFile(vmd *cobra.Command, resp *http.Response, record *warc.Record) err
 
 			if originalPayloadDigest != payloadDigest {
 				if len(filename) > utils.MaxFilenameWithHashLength {
-					extension := path.Ext(filename)
+					extension := filepath.Ext(filename)
 
 					filename = filename[:utils.MaxFilenameWithHashLength-len(extension)] + "[" + payloadDigest[26:] + "]" + extension
 				} else {
-					extension := path.Ext(filename)
+					extension := filepath.Ext(filename)
 
 					filename = filename[:len(filename)-len(extension)] + "[" + payloadDigest[26:] + "]" + extension
 				}
 
-				outputPath = path.Join(outputDir, filename)
+				outputPath = filepath.Join(outputDir, filename)
+				if rel, err := filepath.Rel(outputDir, outputPath); err != nil || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || rel == ".." {
+					return fmt.Errorf("refusing to write outside output dir: %q", filename)
+				}
 				// Double check that the new file doesn't exist
 				if _, err := os.Stat(outputPath); err == nil {
 					if !vmd.Flags().Lookup("allow-overwrite").Changed {
