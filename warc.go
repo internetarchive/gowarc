@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 )
@@ -152,7 +153,7 @@ func recordWriter(settings *RotatorSettings, records chan *RecordBatch, done cha
 	)
 
 	// Create and open the initial file
-	warcFile, err := os.Create(settings.OutputDirectory + currentFileName)
+	warcFile, err := os.Create(filepath.Join(settings.OutputDirectory, currentFileName))
 	if err != nil {
 		panic(err)
 	}
@@ -192,7 +193,7 @@ func recordWriter(settings *RotatorSettings, records chan *RecordBatch, done cha
 
 				// Create the new file and automatically increment the serial inside of GenerateWarcFileName
 				currentFileName = getNextWARCFilename(settings.OutputDirectory, settings.Prefix, settings.Compression, serial)
-				warcFile, err = os.Create(settings.OutputDirectory + currentFileName)
+				warcFile, err = os.Create(filepath.Join(settings.OutputDirectory, currentFileName))
 				if err != nil {
 					panic(err)
 				}
@@ -241,7 +242,8 @@ func recordWriter(settings *RotatorSettings, records chan *RecordBatch, done cha
 			}
 
 			// The WARC file is renamed to remove the .open suffix
-			err := os.Rename(settings.OutputDirectory+currentFileName, strings.TrimSuffix(settings.OutputDirectory+currentFileName, ".open"))
+			fullPath := filepath.Join(settings.OutputDirectory, currentFileName)
+			err := os.Rename(fullPath, strings.TrimSuffix(fullPath, ".open"))
 			if err != nil {
 				panic(err)
 			}
