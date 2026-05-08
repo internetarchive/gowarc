@@ -436,8 +436,13 @@ func (d *customDialer) CustomDialTLSContext(ctx context.Context, network, addres
 		}
 	}
 
+	serverName := address
+	if host, _, err := net.SplitHostPort(address); err == nil {
+		serverName = host
+	}
+
 	cfg := &tls.Config{
-		ServerName:         address[:strings.LastIndex(address, ":")],
+		ServerName:         serverName,
 		InsecureSkipVerify: d.client.verifyCerts,
 	}
 
