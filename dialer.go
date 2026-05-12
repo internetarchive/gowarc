@@ -437,8 +437,10 @@ func (d *customDialer) CustomDialTLSContext(ctx context.Context, network, addres
 	}
 
 	serverName := address
-	if host, _, err := net.SplitHostPort(address); err == nil {
-		serverName = host
+	if host, _, err := net.SplitHostPort(address); err != nil {
+    	return nil, fmt.Errorf("failed to extract host from address %s: %w", address, err)
+	} else {
+    	serverName = host
 	}
 
 	cfg := &tls.Config{
