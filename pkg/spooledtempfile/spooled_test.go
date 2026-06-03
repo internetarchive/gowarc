@@ -55,7 +55,7 @@ func TestInMemoryBasic(t *testing.T) {
 		t.Errorf("Write count mismatch: got %d, want %d", n, len(input))
 	}
 
-	if spool.Len() != len(input) {
+	if spool.Len() != int64(len(input)) {
 		t.Errorf("Len() mismatch: got %d, want %d", spool.Len(), len(input))
 	}
 
@@ -125,7 +125,7 @@ func TestThresholdCrossing(t *testing.T) {
 	}
 
 	total := len(data1) + len(data2)
-	if spool.Len() != total {
+	if spool.Len() != int64(total) {
 		t.Errorf("Len() mismatch: got %d, want %d", spool.Len(), total)
 	}
 
@@ -151,7 +151,7 @@ func TestForceOnDisk(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Write error: %v", err)
 	}
-	if spool.Len() != len(input) {
+	if spool.Len() != int64(len(input)) {
 		t.Errorf("Len() mismatch: got %d, want %d", spool.Len(), len(input))
 	}
 
@@ -227,7 +227,7 @@ func TestReadAtAndSeekOnDisk(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Write error: %v", err)
 	}
-	if spool.Len() != len(data) {
+	if spool.Len() != int64(len(data)) {
 		t.Errorf("Len() mismatch: got %d, want %d", spool.Len(), len(data))
 	}
 
@@ -326,7 +326,7 @@ func TestCloseOnDisk(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Write error: %v", err)
 	}
-	if spool.Len() != len(data) {
+	if spool.Len() != int64(len(data)) {
 		t.Errorf("Len() mismatch: got %d, want %d", spool.Len(), len(data))
 	}
 
@@ -402,7 +402,7 @@ func TestFileName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Write error crossing threshold: %v", err)
 	}
-	if spool.Len() != len(data) {
+	if spool.Len() != int64(len(data)) {
 		t.Errorf("Len() mismatch on-disk: got %d, want %d", spool.Len(), len(data))
 	}
 
@@ -527,7 +527,7 @@ func TestBufferGrowthWithinLimits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Write error: %v", err)
 	}
-	if spool.Len() != len(data1) {
+	if spool.Len() != int64(len(data1)) {
 		t.Errorf("Len() mismatch: got %d, want %d", spool.Len(), len(data1))
 	}
 
@@ -541,7 +541,7 @@ func TestBufferGrowthWithinLimits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Write error: %v", err)
 	}
-	if spool.Len() != len(data1)+len(data2) {
+	if spool.Len() != int64(len(data1)+len(data2)) {
 		t.Errorf("Len() mismatch: got %d, want %d", spool.Len(), len(data1)+len(data2))
 	}
 

@@ -30,7 +30,7 @@ type ReadSeekCloser interface {
 	io.ReadSeekCloser
 	ReaderAt
 	FileName() string
-	Len() int
+	Len() int64
 }
 
 // spooledTempFile writes to memory (or to disk if
@@ -112,15 +112,15 @@ func (s *spooledTempFile) prepareRead() error {
 	return nil
 }
 
-func (s *spooledTempFile) Len() int {
+func (s *spooledTempFile) Len() int64 {
 	if s.file != nil {
 		fi, err := s.file.Stat()
 		if err != nil {
 			return -1
 		}
-		return int(fi.Size())
+		return fi.Size()
 	}
-	return s.buf.Len()
+	return int64(s.buf.Len())
 }
 
 func (s *spooledTempFile) Read(p []byte) (n int, err error) {
