@@ -2,6 +2,7 @@ package warc
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"io"
 	"strconv"
@@ -17,6 +18,12 @@ type Compressor interface {
 	io.Closer
 	Reset(io.Writer)
 }
+
+const (
+	warcRecordVersionLine = "WARC/1.1\r\n"
+	warcHeaderEnd         = "\r\n"
+	warcRecordTrailer     = "\r\n\r\n"
+)
 
 // Writer writes WARC records to WARC files.
 type Writer struct {
@@ -59,8 +66,6 @@ type Record struct {
 func (w *Writer) WriteRecord(r *Record) (recordID string, err error) {
 	defer r.Content.Close()
 
-	var written int64
-
 	// Add the mandatories headers
 	if r.Header.Get("WARC-Date") == "" {
 		r.Header.Set("WARC-Date", time.Now().UTC().Format(time.RFC3339Nano))
@@ -75,13 +80,10 @@ func (w *Writer) WriteRecord(r *Record) (recordID string, err error) {
 		r.Header.Set("WARC-Record-ID", "<urn:uuid:"+recordID+">")
 	}
 
-	if _, err := io.WriteString(w.BufWriter, "WARC/1.1\r\n"); err != nil {
-		return recordID, err
-	}
-
 	// Write headers
+	contentLength := getContentLength(r.Content)
 	if r.Header.Get("Content-Length") == "" {
-		r.Header.Set("Content-Length", strconv.Itoa(getContentLength(r.Content)))
+		r.Header.Set("Content-Length", strconv.FormatInt(contentLength, 10))
 	}
 
 	if r.Header.Get("WARC-Block-Digest") == "" {
@@ -95,27 +97,21 @@ func (w *Writer) WriteRecord(r *Record) (recordID string, err error) {
 		r.Header.Set("WARC-Block-Digest", digest)
 	}
 
-	for key, value := range r.Header {
-		if _, err := io.WriteString(w.BufWriter, fmt.Sprintf("%s: %s\r\n", key, value)); err != nil {
-			return recordID, err
-		}
-	}
-
-	if _, err := io.WriteString(w.BufWriter, "\r\n"); err != nil {
-		return recordID, err
-	}
+	headerBlock := serializedRecordHeader(r.Header)
+	w.setCompressorContentSize(int64(len(headerBlock)) + contentLength + int64(len(warcRecordTrailer)))
 
 	r.Content.Seek(0, 0)
-	if written, err = io.Copy(w.BufWriter, r.Content); err != nil {
+	recordReader := io.MultiReader(
+		bytes.NewReader(headerBlock),
+		r.Content,
+		strings.NewReader(warcRecordTrailer),
+	)
+	if _, err = io.Copy(w.BufWriter, recordReader); err != nil {
 		return recordID, err
 	}
 
-	if written > 0 {
-		DataTotal.Add(written)
-	}
-
-	if _, err := io.WriteString(w.BufWriter, "\r\n\r\n"); err != nil {
-		return recordID, err
+	if contentLength > 0 {
+		DataTotal.Add(int64(contentLength))
 	}
 
 	// Flush data
@@ -125,6 +121,31 @@ func (w *Writer) WriteRecord(r *Record) (recordID string, err error) {
 	}
 
 	return recordID, nil
+}
+
+func serializedRecordHeader(header Header) []byte {
+	var buf bytes.Buffer
+	buf.WriteString(warcRecordVersionLine)
+	for key, value := range header {
+		buf.WriteString(key)
+		buf.WriteString(": ")
+		buf.WriteString(value)
+		buf.WriteString("\r\n")
+	}
+	buf.WriteString(warcHeaderEnd)
+	return buf.Bytes()
+}
+
+func (w *Writer) setCompressorContentSize(size int64) {
+	if w.Compressor == nil {
+		return
+	}
+	compressor, ok := w.Compressor.(*sizedZstdWriter)
+	if !ok {
+		return
+	}
+	compressor.SetContentSize(size)
+	w.BufWriter.Reset(w.Compressor)
 }
 
 // WriteInfoRecord method can be used to write an information record to the WARC file and flush the data

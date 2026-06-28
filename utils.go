@@ -91,14 +91,7 @@ func NewWriter(writer io.Writer, fileName string, digestAlgorithm DigestAlgorith
 			}
 		}
 
-		// Create ZStandard writer either with or without the encoder dictionary and return it.
-		var zstdWriter *zstd.Encoder
-		var err error
-		eopts := []zstd.EOption{zstd.WithEncoderLevel(zstd.SpeedBetterCompression)}
-		if len(dictionary) > 0 {
-			eopts = append(eopts, zstd.WithEncoderDict(dictionary))
-		}
-		zstdWriter, err = zstd.NewWriter(writer, eopts...)
+		zstdWriter, err := newSizedZstdWriter(writer, dictionary)
 		if err != nil {
 			return nil, err
 		}
@@ -208,7 +201,7 @@ func checkRotatorSettings(settings *RotatorSettings) (err error) {
 	return nil
 }
 
-func getContentLength(rwsc spooledtempfile.ReadWriteSeekCloser) int {
+func getContentLength(rwsc spooledtempfile.ReadWriteSeekCloser) int64 {
 	// If the FileName leads to no existing file, it means that the SpooledTempFile
 	// never had the chance to buffer to disk instead of memory, in which case we can
 	// just read the buffer (which should be <= 2MB) and return the length
@@ -216,7 +209,7 @@ func getContentLength(rwsc spooledtempfile.ReadWriteSeekCloser) int {
 		rwsc.Seek(0, 0)
 		buf := new(bytes.Buffer)
 		buf.ReadFrom(rwsc)
-		return buf.Len()
+		return int64(buf.Len())
 	} else {
 		// Else, we return the size of the file on disk
 		fileInfo, err := os.Stat(rwsc.FileName())
@@ -224,6 +217,6 @@ func getContentLength(rwsc spooledtempfile.ReadWriteSeekCloser) int {
 			panic(err)
 		}
 
-		return int(fileInfo.Size())
+		return fileInfo.Size()
 	}
 }
