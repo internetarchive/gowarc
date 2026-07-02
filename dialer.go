@@ -438,9 +438,9 @@ func (d *customDialer) CustomDialTLSContext(ctx context.Context, network, addres
 
 	serverName := address
 	if host, _, err := net.SplitHostPort(address); err != nil {
-    	return nil, fmt.Errorf("failed to extract host from address %s: %w", address, err)
+		return nil, fmt.Errorf("failed to extract host from address %s: %w", address, err)
 	} else {
-    	serverName = host
+		serverName = host
 	}
 
 	cfg := &tls.Config{
@@ -611,7 +611,7 @@ func (d *customDialer) writeWARCFromConnection(ctx context.Context, reqPipe, res
 			}
 
 			r.Header.Set("WARC-Block-Digest", digest)
-			r.Header.Set("Content-Length", strconv.Itoa(getContentLength(r.Content)))
+			r.Header.Set("Content-Length", strconv.FormatInt(getContentLength(r.Content), 10))
 
 			if d.client.dedupeOptions.LocalDedupe {
 				if r.Header.Get("WARC-Type") == "response" && !slices.Contains(emptyPayloadDigests, r.Header.Get("WARC-Payload-Digest")) {

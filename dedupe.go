@@ -37,7 +37,7 @@ type revisitRecord struct {
 	responseUUID string
 	targetURI    string
 	date         time.Time
-	size         int
+	size         int64
 }
 
 func (d *customDialer) checkLocalRevisit(digest string) revisitRecord {
@@ -75,7 +75,7 @@ func checkCDXRevisit(CDXURL string, digest string, targetURI string, cookie stri
 	cdxReply := strings.Fields(string(body))
 
 	if len(cdxReply) >= 7 && cdxReply[3] != "warc/revisit" && cdxReply[5] == digest {
-		recordSize, _ := strconv.Atoi(cdxReply[6])
+		recordSize, _ := strconv.ParseInt(cdxReply[6], 10, 64)
 
 		t, err := time.Parse("20060102150405", cdxReply[1])
 		if err != nil {
