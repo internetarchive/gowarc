@@ -80,9 +80,12 @@ func (w *Writer) WriteRecord(r *Record) (recordID string, err error) {
 		r.Header.Set("WARC-Record-ID", "<urn:uuid:"+recordID+">")
 	}
 
-	// Write headers
-	contentLength := getContentLength(r.Content)
-	if r.Header.Get("Content-Length") == "" {
+	var contentLength int64
+	if CL := r.Header.Get("Content-Length"); CL != "" {
+		contentLength, err = strconv.ParseInt(CL, 10, 64)
+	}
+	if r.Header.Get("Content-Length") == "" || err != nil {
+		contentLength = getContentLength(r.Content)
 		r.Header.Set("Content-Length", strconv.FormatInt(contentLength, 10))
 	}
 
