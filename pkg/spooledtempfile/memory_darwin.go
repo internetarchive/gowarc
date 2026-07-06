@@ -39,15 +39,12 @@ var getSystemMemoryUsedFraction = func() (float64, error) {
 		return 0, fmt.Errorf("failed to get vm.page_free_count: %w", err)
 	}
 
-	purgeablePages, err := unix.SysctlUint32("vm.page_purgeable_count")
-	if err != nil {
-		return 0, fmt.Errorf("failed to get vm.page_purgeable_count: %w", err)
-	}
+	// vm.page_purgeable_count may be unavailable on some macOS environments (e.g. CI VMs).
+	// Treat it as 0 when missing so memory usage is conservatively estimated.
+	purgeablePages, _ := unix.SysctlUint32("vm.page_purgeable_count")
 
-	speculativePages, err := unix.SysctlUint32("vm.page_speculative_count")
-	if err != nil {
-		return 0, fmt.Errorf("failed to get vm.page_speculative_count: %w", err)
-	}
+	// vm.page_speculative_count may likewise be unavailable on some macOS environments.
+	speculativePages, _ := unix.SysctlUint32("vm.page_speculative_count")
 
 	// Calculate used memory
 	// Used = Total - (Free + Purgeable + Speculative)
