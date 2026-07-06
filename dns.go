@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/miekg/dns"
+	"golang.org/x/sync/singleflight"
 )
 
 // dnsResult holds both IPv4 and IPv6 addresses from DNS resolution
@@ -206,22 +207,38 @@ func (d *customDialer) concurrentDNSLookup(ctx context.Context, address string, 
 	return ipv4, ipv6, errA, errAAAA
 }
 
+var g singleflight.Group
+
 func (d *customDialer) lookupIP(ctx context.Context, address string, recordType uint16, DNSServer int) (net.IP, error) {
 	m := new(dns.Msg)
 	m.SetQuestion(dns.Fqdn(address), recordType)
 
-	r, _, err := d.DNSClient.ExchangeContext(ctx, m, net.JoinHostPort(d.DNSConfig.Servers[DNSServer], d.DNSConfig.Port))
-	if err != nil {
-		return nil, err
-	}
-
-	// Record the DNS response
 	recordTypeStr := "TYPE=A"
 	if recordType == dns.TypeAAAA {
 		recordTypeStr = "TYPE=AAAA"
 	}
 
-	d.client.WriteRecord(fmt.Sprintf("dns:%s?%s", address, recordTypeStr), "resource", "text/dns", r.String(), nil)
+	uniqKey := d.DNSConfig.Servers[DNSServer] + ":" + d.DNSConfig.Port + ":" + recordTypeStr + ":" + address
+	v, err, _ := g.Do(uniqKey, func() (any, error) {
+		r, _, err := d.DNSClient.ExchangeContext(ctx, m, net.JoinHostPort(d.DNSConfig.Servers[DNSServer], d.DNSConfig.Port))
+		if err != nil {
+			return nil, err
+		}
+
+		// Record the DNS response
+		d.client.WriteRecord(fmt.Sprintf("dns:%s?%s", address, recordTypeStr), "resource", "text/dns", r.String(), nil)
+
+		return r, nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	r, ok := v.(*dns.Msg)
+	if !ok {
+		return nil, fmt.Errorf("unexpected response type: %T", r)
+	}
 
 	for _, answer := range r.Answer {
 		switch recordType {
