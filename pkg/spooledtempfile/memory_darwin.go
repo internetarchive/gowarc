@@ -4,6 +4,7 @@ package spooledtempfile
 
 import (
 	"fmt"
+	"log"
 
 	"golang.org/x/sys/unix"
 )
@@ -41,10 +42,16 @@ var getSystemMemoryUsedFraction = func() (float64, error) {
 
 	// vm.page_purgeable_count may be unavailable on some macOS environments (e.g. CI VMs).
 	// Treat it as 0 when missing so memory usage is conservatively estimated.
-	purgeablePages, _ := unix.SysctlUint32("vm.page_purgeable_count")
+	purgeablePages, err := unix.SysctlUint32("vm.page_purgeable_count")
+	if err != nil {
+		log.Printf("spooledtempfile: vm.page_purgeable_count unavailable, assuming 0: %v", err)
+	}
 
 	// vm.page_speculative_count may likewise be unavailable on some macOS environments.
-	speculativePages, _ := unix.SysctlUint32("vm.page_speculative_count")
+	speculativePages, err := unix.SysctlUint32("vm.page_speculative_count")
+	if err != nil {
+		log.Printf("spooledtempfile: vm.page_speculative_count unavailable, assuming 0: %v", err)
+	}
 
 	// Calculate used memory
 	// Used = Total - (Free + Purgeable + Speculative)
