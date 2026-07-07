@@ -139,16 +139,17 @@ func serializedRecordHeader(header Header) []byte {
 	return buf.Bytes()
 }
 
+// Must be called before any data is written to the compressor.
 func (w *Writer) setCompressorContentSize(size int64) {
 	if w.Compressor == nil {
 		return
 	}
+
 	compressor, ok := w.Compressor.(*sizedZstdWriter)
 	if !ok {
 		return
 	}
 	compressor.SetContentSize(size)
-	w.BufWriter.Reset(w.Compressor)
 }
 
 // WriteInfoRecord method can be used to write an information record to the WARC file and flush the data
