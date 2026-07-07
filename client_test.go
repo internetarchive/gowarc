@@ -1,6 +1,7 @@
 package warc
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
@@ -1667,6 +1668,7 @@ func TestHTTPClientWithZStandard(t *testing.T) {
 
 	for _, path := range files {
 		testFileSingleHashCheck(t, path, "sha1:UIRWL5DFIPQ4MX3D3GFHM2HCVU3TZ6I3", []string{"26872"}, 1, server.URL+"/")
+		assertZSTDFileFramesValid(t, path)
 	}
 }
 
@@ -1713,6 +1715,43 @@ func TestHTTPClientWithZStandardDictionary(t *testing.T) {
 
 	for _, path := range files {
 		testFileSingleHashCheck(t, path, "sha1:UIRWL5DFIPQ4MX3D3GFHM2HCVU3TZ6I3", []string{"26872"}, 1, server.URL+"/")
+		assertZSTDFileFramesValid(t, path)
+	}
+}
+
+func assertZSTDFileFramesValid(t *testing.T, path string) {
+	t.Helper()
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("assertZSTDFileFramesValid: read %s: %v", path, err)
+	}
+
+	// Skip any leading skippable frames which we add when we are embedding a dictionary.
+	for len(data) >= 8 {
+		m := uint32(data[0]) | uint32(data[1])<<8 | uint32(data[2])<<16 | uint32(data[3])<<24
+		if m != 0x184D2A5D {
+			break
+		}
+		size := uint32(data[4]) | uint32(data[5])<<8 | uint32(data[6])<<16 | uint32(data[7])<<24
+		data = data[8+size:]
+	}
+
+	r := bytes.NewReader(data)
+	for i := 0; ; i++ {
+		frame, err := readZSTDFrameBytes(r)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("assertZSTDFileFramesValid: read frame %d from %s: %v", i, path, err)
+		}
+		if !zstdFrameHasContentSize(frame) {
+			t.Errorf("ZSTD frame %d in %s is missing Frame_Content_Size", i, path)
+		}
+		if !zstdFrameHasChecksum(frame) {
+			t.Errorf("ZSTD frame %d in %s is missing Content_Checksum", i, path)
+		}
 	}
 }
 
