@@ -1,23 +1,23 @@
 module github.com/internetarchive/gowarc
 
-go 1.25.4
+go 1.26.0
 
 require (
 	github.com/google/uuid v1.6.0
-	github.com/klauspost/compress v1.19.2
+	github.com/klauspost/compress v1.20.1
 	github.com/maypok86/otter v1.2.4
 	github.com/miekg/dns v1.1.73
 	github.com/refraction-networking/utls v1.8.2
 	github.com/remeh/sizedwaitgroup v1.0.0
 	github.com/spf13/cobra v1.10.2
 	github.com/things-go/go-socks5 v0.1.3
-	github.com/ulikunitz/xz v0.5.16
+	github.com/ulikunitz/xz v0.5.17
 	github.com/valyala/bytebufferpool v1.0.0
 	github.com/zeebo/blake3 v0.2.4
 	go.uber.org/goleak v1.3.0
-	golang.org/x/net v0.58.0
-	golang.org/x/sync v0.22.0
-	golang.org/x/sys v0.47.0
+	golang.org/x/net v0.59.0
+	golang.org/x/sync v0.23.0
+	golang.org/x/sys v0.48.0
 )
 
 // By default, and historically, this project uses klauspost's gzip implementation,
@@ -33,7 +33,7 @@ require (
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/klauspost/cpuid/v2 v2.0.12 // indirect
 	github.com/spf13/pflag v1.0.9 // indirect
-	golang.org/x/crypto v0.55.0 // indirect
+	golang.org/x/crypto v0.57.0 // indirect
 )
 
 // Unsure exactly where these versions came from, but no longer exist. If we plan to publish under these versions, we need to remove them from this retract list.
