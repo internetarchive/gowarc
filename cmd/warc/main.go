@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"os"
 
+	"github.com/internetarchive/gowarc/cmd/warc/concat"
 	"github.com/internetarchive/gowarc/cmd/warc/extract"
 	"github.com/internetarchive/gowarc/cmd/warc/mend"
 	"github.com/internetarchive/gowarc/cmd/warc/verify"
@@ -20,6 +21,7 @@ func init() {
 		setupLogger(cmd)
 	}
 
+	rootCmd.AddCommand(concat.Command)
 	rootCmd.AddCommand(extract.Command)
 	rootCmd.AddCommand(mend.Command)
 	rootCmd.AddCommand(verify.Command)
