@@ -1,13 +1,13 @@
 module github.com/internetarchive/gowarc
 
-go 1.26.0
+go 1.27
 
 require (
 	github.com/google/uuid v1.6.0
 	github.com/klauspost/compress v1.20.3
 	github.com/maypok86/otter v1.2.4
 	github.com/miekg/dns v1.1.73
-	github.com/refraction-networking/utls v1.8.2
+	github.com/refraction-networking/utls v1.8.3-0.20261006222701-ff1b50fbbe9a
 	github.com/remeh/sizedwaitgroup v1.0.0
 	github.com/spf13/cobra v1.10.2
 	github.com/things-go/go-socks5 v0.1.3
@@ -27,11 +27,11 @@ require (
 // go build -tags standard_gzip
 
 require (
-	github.com/andybalholm/brotli v1.1.1 // indirect
 	github.com/dolthub/maphash v0.1.0 // indirect
 	github.com/gammazero/deque v1.0.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/klauspost/cpuid/v2 v2.0.12 // indirect
+	github.com/molecule-man/go-brrr v1.2.0 // indirect
 	github.com/spf13/pflag v1.0.9 // indirect
 	golang.org/x/crypto v0.58.0 // indirect
 )
