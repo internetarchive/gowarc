@@ -10,12 +10,12 @@ require (
 	github.com/refraction-networking/utls v1.8.3-0.20261006222701-ff1b50fbbe9a
 	github.com/remeh/sizedwaitgroup v1.0.0
 	github.com/spf13/cobra v1.10.2
-	github.com/things-go/go-socks5 v0.1.3
+	github.com/things-go/go-socks5 v0.1.4
 	github.com/ulikunitz/xz v0.5.17
 	github.com/valyala/bytebufferpool v1.0.0
 	github.com/zeebo/blake3 v0.2.4
 	go.uber.org/goleak v1.3.0
-	golang.org/x/net v0.61.0
+	golang.org/x/net v0.62.0
 	golang.org/x/sync v0.24.0
 	golang.org/x/sys v0.49.0
 )
