@@ -16,8 +16,8 @@ require (
 	github.com/zeebo/blake3 v0.2.4
 	go.uber.org/goleak v1.3.0
 	golang.org/x/net v0.62.0
-	golang.org/x/sync v0.24.0
-	golang.org/x/sys v0.49.0
+	golang.org/x/sync v0.25.0
+	golang.org/x/sys v0.50.0
 )
 
 // By default, and historically, this project uses klauspost's gzip implementation,
