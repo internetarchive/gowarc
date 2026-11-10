@@ -142,11 +142,12 @@ func readUntilDelim(r *bufio.Reader, delim []byte) (line []byte, n int64, err er
 		return nil, 0, errors.New("empty delimiter")
 	}
 
-	intermediateBuf := *intermediateBufPool.Get().(*[]byte)
+	p := intermediateBufPool.Get().(*[]byte)
+	intermediateBuf := (*p)[:0]
 	defer func() {
-		intermediateBufPool.Put(&intermediateBuf)
+		*p = intermediateBuf
+		intermediateBufPool.Put(p)
 	}()
-	intermediateBuf = intermediateBuf[:0]
 	last := delim[len(delim)-1]
 
 	for {
@@ -156,24 +157,25 @@ func readUntilDelim(r *bufio.Reader, delim []byte) (line []byte, n int64, err er
 		intermediateBuf = append(intermediateBuf, chunk...)
 
 		// Search for the delimiter starting from a position that accounts for overlap
-		start := len(intermediateBuf) - len(chunk) - (len(delim) - 1)
-		if start < 0 {
-			start = 0
-		}
+		start := max(len(intermediateBuf)-len(chunk)-(len(delim)-1), 0)
 
 		if i := bytes.Index(intermediateBuf[start:], delim); i >= 0 {
 			i += start
-			return intermediateBuf[:i], n, nil
+			res := make([]byte, i)
+			copy(res, intermediateBuf[:i])
+			return res, n, nil
 		}
 
 		if e != nil {
 			if e == bufio.ErrBufferFull {
 				continue // Continue reading if buffer is full
 			}
+			res := make([]byte, len(intermediateBuf))
+			copy(res, intermediateBuf)
 			if e == io.EOF {
-				return intermediateBuf, n, io.EOF
+				return res, n, io.EOF
 			}
-			return intermediateBuf, n, e
+			return res, n, e
 		}
 	}
 }

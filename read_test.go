@@ -490,6 +490,24 @@ func TestReaderSize(t *testing.T) {
 	}
 }
 
+func TestReadUntilDelimConcurrent(t *testing.T) {
+	for i := 0; i < 8; i++ {
+		want := fmt.Sprintf("line-%d", i)
+		t.Run(want, func(t *testing.T) {
+			t.Parallel()
+			for j := 0; j < 1000; j++ {
+				line, _, err := readUntilDelim(bufio.NewReader(strings.NewReader(want+"\r\n")), []byte("\r\n"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if string(line) != want {
+					t.Fatalf("got %q, want %q", line, want)
+				}
+			}
+		})
+	}
+}
+
 func BenchmarkBasicRead(b *testing.B) {
 	// default test warc location
 	path := "testdata/warcs/test.warc.gz"
