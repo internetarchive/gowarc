@@ -490,6 +490,88 @@ func TestReaderSize(t *testing.T) {
 	}
 }
 
+func TestReadUntilDelim(t *testing.T) {
+	long := strings.Repeat("x", 100)
+	for _, tc := range []struct {
+		name     string
+		input    string
+		bufSize  int
+		wantLine string
+		wantN    int64
+		wantErr  error
+	}{
+		{"simple", "abc\r\nrest", 4096, "abc", 5, nil},
+		{"empty-line", "\r\nrest", 4096, "", 2, nil},
+		{"bare-lf-in-line", "a\nb\r\nrest", 4096, "a\nb", 5, nil},
+		{"long-line", long + "\r\nrest", 16, long, 102, nil},
+		{"delim-split-across-chunks", long[:15] + "\r\nrest", 16, long[:15], 17, nil},
+		{"bare-lf-across-chunks", long[:20] + "\n" + long[:20] + "\r\n", 16, long[:20] + "\n" + long[:20], 43, nil},
+		{"eof-no-delim", "abc", 4096, "abc", 3, io.EOF},
+		{"eof-no-delim-long", long, 16, long, 100, io.EOF},
+		{"eof-empty", "", 4096, "", 0, io.EOF},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rdr := bufio.NewReaderSize(strings.NewReader(tc.input), tc.bufSize)
+			line, n, err := readUntilDelim(rdr, []byte("\r\n"))
+			if err != tc.wantErr || string(line) != tc.wantLine || n != tc.wantN {
+				t.Fatalf("got (%q, %d, %v), want (%q, %d, %v)", line, n, err, tc.wantLine, tc.wantN, tc.wantErr)
+			}
+		})
+	}
+}
+
+// TestReadUntilDelimResultNotReused checks a returned line survives later calls (#220).
+func TestReadUntilDelimResultNotReused(t *testing.T) {
+	delim := []byte("\r\n")
+	for _, tc := range []struct {
+		name    string
+		bufSize int
+		lineLen int
+	}{
+		{"fits-in-bufio", 4096, 64},
+		{"spans-bufio-chunks", 16, 200},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			first := strings.Repeat("a", tc.lineLen)
+			second := strings.Repeat("b", tc.lineLen)
+			// Repeat: under -race, sync.Pool randomly drops some Puts.
+			for i := 0; i < 20; i++ {
+				line1, _, err := readUntilDelim(bufio.NewReaderSize(strings.NewReader(first+"\r\n"), tc.bufSize), delim)
+				if err != nil {
+					t.Fatal(err)
+				}
+				line2, _, err := readUntilDelim(bufio.NewReaderSize(strings.NewReader(second+"\r\n"), tc.bufSize), delim)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if string(line1) != first || string(line2) != second {
+					t.Fatalf("first line changed after second call: got %q, %q", line1, line2)
+				}
+			}
+		})
+	}
+}
+
+// TestReadUntilDelimConcurrent uses long lines so the pool is used; run with -race.
+func TestReadUntilDelimConcurrent(t *testing.T) {
+	for i := 0; i < 8; i++ {
+		want := strings.Repeat(fmt.Sprint(i), 200)
+		t.Run(fmt.Sprint(i), func(t *testing.T) {
+			t.Parallel()
+			for j := 0; j < 1000; j++ {
+				rdr := bufio.NewReaderSize(strings.NewReader(want+"\r\n"), 16)
+				line, _, err := readUntilDelim(rdr, []byte("\r\n"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if string(line) != want {
+					t.Fatalf("got %q, want %q", line, want)
+				}
+			}
+		})
+	}
+}
+
 func BenchmarkBasicRead(b *testing.B) {
 	// default test warc location
 	path := "testdata/warcs/test.warc.gz"

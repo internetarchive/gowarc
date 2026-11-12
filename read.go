@@ -132,49 +132,55 @@ var intermediateBufPool = sync.Pool{
 	},
 }
 
+// Larger buffers are not returned to intermediateBufPool, so one huge line doesn't stay pinned there.
+const maxPooledBufCap = 64 << 10
+
 // readUntilDelim reads from r until the multi-byte delimiter `delim` is found.
 // It returns the bytes BEFORE the delimiter, the total number of bytes consumed
 // from r (including the delimiter), and an error. If EOF occurs before seeing
 // the delimiter, it returns the data read and io.EOF.
 // This function is designed to handle larger inputs by reading in chunks.
+// The returned slice is owned by the caller.
 func readUntilDelim(r *bufio.Reader, delim []byte) (line []byte, n int64, err error) {
 	if len(delim) == 0 {
 		return nil, 0, errors.New("empty delimiter")
 	}
-
-	intermediateBuf := *intermediateBufPool.Get().(*[]byte)
-	defer func() {
-		intermediateBufPool.Put(&intermediateBuf)
-	}()
-	intermediateBuf = intermediateBuf[:0]
 	last := delim[len(delim)-1]
 
-	for {
-		// Read a chunk of data
-		chunk, e := r.ReadSlice(last)
-		n += int64(len(chunk))
-		intermediateBuf = append(intermediateBuf, chunk...)
+	// Fast path (nearly every header line): the whole line is in r's buffer.
+	chunk, e := r.ReadSlice(last)
+	n = int64(len(chunk))
+	if e == nil && bytes.HasSuffix(chunk, delim) {
+		return bytes.Clone(chunk[:len(chunk)-len(delim)]), n, nil
+	}
+	if e != nil && e != bufio.ErrBufferFull {
+		return bytes.Clone(chunk), n, e
+	}
 
+	// Slow path: the line spans several chunks, so accumulate it.
+	p := intermediateBufPool.Get().(*[]byte)
+	intermediateBuf := append((*p)[:0], chunk...)
+
+	for {
 		// Search for the delimiter starting from a position that accounts for overlap
-		start := len(intermediateBuf) - len(chunk) - (len(delim) - 1)
-		if start < 0 {
-			start = 0
-		}
+		start := max(len(intermediateBuf)-len(chunk)-(len(delim)-1), 0)
 
 		if i := bytes.Index(intermediateBuf[start:], delim); i >= 0 {
-			i += start
-			return intermediateBuf[:i], n, nil
+			line = bytes.Clone(intermediateBuf[:start+i])
+			if cap(intermediateBuf) <= maxPooledBufCap {
+				*p = intermediateBuf
+				intermediateBufPool.Put(p)
+			}
+			return line, n, nil
 		}
 
-		if e != nil {
-			if e == bufio.ErrBufferFull {
-				continue // Continue reading if buffer is full
-			}
-			if e == io.EOF {
-				return intermediateBuf, n, io.EOF
-			}
-			return intermediateBuf, n, e
+		if e != nil && e != bufio.ErrBufferFull {
+			return intermediateBuf, n, e // give the buffer away rather than copy it
 		}
+
+		chunk, e = r.ReadSlice(last)
+		n += int64(len(chunk))
+		intermediateBuf = append(intermediateBuf, chunk...)
 	}
 }
 
@@ -254,8 +260,7 @@ func (r *Reader) ReadRecord(opts ...ReadOpts) (*Record, error) {
 		}
 	}
 
-	_warcVer, _, err := readUntilDelim(r.bufReader, []byte("\r\n"))
-	warcVer := string(_warcVer) // clone to avoid changes in underlying buffer
+	warcVer, _, err := readUntilDelim(r.bufReader, []byte("\r\n"))
 	if err != nil {
 		if err == io.EOF && len(warcVer) == 0 {
 			// treat as EOF for safety if member present but empty
@@ -263,9 +268,6 @@ func (r *Reader) ReadRecord(opts ...ReadOpts) (*Record, error) {
 		}
 		return nil, fmt.Errorf("reading WARC version: %w", err)
 	}
-	// Copy the WARC version before parsing headers since readUntilDelim reuses
-	// its backing buffer via a sync.Pool. Without copying, subsequent calls may
-	// overwrite the data referenced by warcVer, resulting in corrupted versions.
 	warcVersion := string(warcVer)
 
 	header := NewHeader()
