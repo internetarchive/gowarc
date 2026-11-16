@@ -4,7 +4,7 @@ go 1.27
 
 require (
 	github.com/google/uuid v1.6.0
-	github.com/klauspost/compress v1.20.3
+	github.com/klauspost/compress v1.20.4
 	github.com/maypok86/otter v1.2.4
 	github.com/miekg/dns v1.1.73
 	github.com/refraction-networking/utls v1.8.3-0.20261006222701-ff1b50fbbe9a
